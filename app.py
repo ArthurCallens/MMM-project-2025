@@ -479,6 +479,15 @@ with tab_qm:
         st.success(f"Done: {r['nsteps']} steps, wall time {r['elapsed']:.2f} s "
                    f"({r['nsteps'] / max(r['elapsed'], 1e-9):.0f} steps/s). Final norm = {r['norms'][-1]:.10f}.")
 
+        if r["state_kind"] == "Ground state at origin" and r["drive_kind"] == "None (free evolution)":
+            st.info(
+                "**Nothing should move here** -- the ground state is an energy eigenstate, so |Ψ|² is "
+                "exactly stationary (only its complex phase evolves). That's expected and is itself the "
+                "assignment's first QM validation check. To see motion: switch Initial state to "
+                "**Displaced coherent state** (oscillates on its own, like a classical particle), or keep "
+                "the ground state and turn on a **Drive** (the field kicks the electron)."
+            )
+
         st.markdown("#### Wavefunction density |Ψ|² (animation)")
         show_video(r["anim"], "qm_density", key="qm_video")
 
