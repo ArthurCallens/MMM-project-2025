@@ -637,6 +637,7 @@ with tab_coupled:
         n_frames = 40
         frame_every = max(1, int(nsteps) // n_frames)
         frames = []
+        qm_frames = [[] for _ in wells]  # per-well |Psi|^2 snapshots, independent of the EM field's scale
         label = "baseline (no backward coupling)" if force_backward_off else "as configured"
         prog = st.progress(0.0, text=f"Running coupled EM/QM ({label})…")
         t0 = time.time()
@@ -644,6 +645,8 @@ with tab_coupled:
             coupled.step()
             if n % frame_every == 0:
                 frames.append(fdtd.Hz.copy())
+                for wi, w in enumerate(wells):
+                    qm_frames[wi].append(np.abs(w.qm.psi) ** 2)
             if n % max(1, int(nsteps) // 20) == 0:
                 prog.progress(min(1.0, (n + 1) / nsteps), text=f"Running coupled EM/QM ({label})… step {n + 1}/{int(nsteps)}")
         prog.empty()
@@ -657,8 +660,15 @@ with tab_coupled:
         with st.spinner(f"Encoding field animation ({label})…"):
             anim = safe_animate(field_frames_to_gif, frames, grid.xd, grid.yd, "H_z(x,y)", mark_fn=mark_wells)
 
+        qm_anims = []
+        with st.spinner(f"Encoding wavefunction-density animation(s) ({label})…"):
+            for wi, w in enumerate(wells):
+                qm_anims.append(safe_animate(field_frames_to_gif, qm_frames[wi], w.qm.x, w.qm.y,
+                                              f"{w.label}: |Ψ(x,y)|²", cmap="viridis", symmetric=False))
+
         return dict(grid=grid, fdtd=fdtd, wells=wells, frames=frames, elapsed=elapsed,
-                    nsteps=int(nsteps), anim=anim, monitor=monitor, any_backward=any(w.backward_coupling for w in wells))
+                    nsteps=int(nsteps), anim=anim, qm_anims=qm_anims, monitor=monitor,
+                    any_backward=any(w.backward_coupling for w in wells))
 
     if run_coupled:
         st.session_state["coupled_result"] = _run_coupled_once(force_backward_off=False)
@@ -677,7 +687,28 @@ with tab_coupled:
                     "the comparison option below, to see the difference.")
 
         st.markdown("#### EM field animation, well centre(s) marked (green triangle = downstream monitor point)")
+        st.caption(
+            "Note: the 'x' well markers above are drawn at each well's *fixed* physical location -- they "
+            "do not move, since this view shows the EM field, not the electron. To actually see the "
+            "electron move (or not), look at the |Ψ|² animation(s) below, and the <x>(t) trajectory plots."
+        )
         show_video(r["anim"], "coupled_field", key="coupled_video")
+
+        st.markdown("#### Electron wavefunction density |Ψ|² per well")
+        st.caption(
+            "Heads up: even with this fixed, you may not see *visible* motion here at typical settings, for "
+            "two genuine physical/practical reasons -- not a bug: (1) a nm-scale, high-frequency well is a "
+            "very stiff confining potential, so even a strong field only displaces the electron a tiny "
+            "fraction of the well's width; (2) the QM step here is locked to the EM grid's (very small) "
+            "CFL time step, so the default step count only covers ~1-2 of the well's own oscillation periods "
+            "-- nowhere near enough for a driven oscillation to build up. To make it visible: push **Number "
+            "of time steps** toward its max, use **resonant** driving, and/or increase the amplitude -- or "
+            "use the **Part 2** tab, which decouples the QM step from any EM grid and cheaply shows many "
+            "periods (that's exactly why Part 2 exists as a separate, EM-free QM sandbox)."
+        )
+        for wi, w in enumerate(wells):
+            st.markdown(f"**{w.label}** (backward coupling: {w.backward_coupling})")
+            show_video(r["qm_anims"][wi], f"coupled_qm_density_{wi}", key=f"coupled_qm_video_{wi}")
 
         if baseline is not None:
             st.markdown("---")
@@ -694,6 +725,17 @@ with tab_coupled:
             with c2:
                 st.markdown("**Without backward coupling (baseline)**")
                 show_video(baseline["anim"], "coupled_field_without_backward", key="coupled_video_without")
+
+            st.markdown("#### Electron wavefunction density |Ψ|²: with vs. without backward coupling")
+            for wi, w in enumerate(wells):
+                st.markdown(f"**{w.label}**")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.caption("With backward coupling")
+                    show_video(r["qm_anims"][wi], f"coupled_qm_with_{wi}", key=f"coupled_qm_video_with_{wi}")
+                with c2:
+                    st.caption("Without (baseline)")
+                    show_video(baseline["qm_anims"][wi], f"coupled_qm_without_{wi}", key=f"coupled_qm_video_without_{wi}")
 
             st.markdown("#### Downstream H_z field: with vs. without backward coupling")
             t_fs = np.array(r["monitor"].t) / FS
