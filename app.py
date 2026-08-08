@@ -818,8 +818,12 @@ with tab_coupled:
         "well radiating into the grid, as in the section above) and (2) — more subtly — "
         "**the electron's own dynamics**, because backward coupling modifies the very field "
         "that drives the well, via its own radiation. That self-consistent feedback is the "
-        "quantum analogue of radiation reaction, and it's real: at moderate particle density "
-        "it already shifts level populations by tens of percent (verified below)."
+        "quantum analogue of radiation reaction, and it's real, but it's also strongly "
+        "N-dependent: at the *Moderate* preset (N=1e8/m) it's a small effect (well under 1% "
+        "total population redistribution); at the *Strong* preset (N=1e9/m) it becomes large "
+        "(~40% total population redistribution, verified below) — this section deliberately "
+        "spans that range so you can see the effect grow with coupling strength, rather than "
+        "defaulting to a single number."
     )
     with st.form("levels_form"):
         c1, c2, c3, c4 = st.columns(4)
