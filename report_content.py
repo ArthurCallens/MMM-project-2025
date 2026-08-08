@@ -20,15 +20,15 @@ from emqm.quantum import Schrodinger2D
 from emqm.sources import GaussianPulse, fft_frequency_response
 from emqm.tfsf import PlaneWave
 from emqm.validation import free_space_plane_wave_delay, pmc_cylinder_hz
-from video import field_frames_to_video
+from video import field_frames_to_gif
 
 
 def _safe_video(*args, **kwargs):
     """Never let a rendering-environment quirk break the whole report."""
     try:
-        return field_frames_to_video(*args, **kwargs)
+        return field_frames_to_gif(*args, **kwargs)
     except Exception:
-        return None, None
+        return None
 
 
 def _propagation_and_pml_demo():
@@ -54,7 +54,7 @@ def _propagation_and_pml_demo():
             energies.append((sim.t, np.sum(sim.Ex ** 2) + np.sum(sim.Ey ** 2) + np.sum(sim.Hz ** 2)))
         if n % frame_every == 0:
             frames.append(sim.Hz.copy())
-    video, video_mime = _safe_video(frames, grid.xd, grid.yd, "H_z(x,y) — plane wave crossing + PML absorption", fps=14)
+    anim = _safe_video(frames, grid.xd, grid.yd, "H_z(x,y) — plane wave crossing + PML absorption", fps=10)
     t_arr = np.array(obs.t)
     ey = np.array(obs.Ey)
     peak_t = t_arr[np.argmax(np.abs(ey))]
@@ -63,7 +63,7 @@ def _propagation_and_pml_demo():
     peak_e = energies[:, 1].max()
     final_e = energies[-1, 1]
     db = 10 * np.log10(final_e / peak_e)
-    return dict(t_arr=t_arr, ey=ey, peak_t=peak_t, expected=expected, energies=energies, db=db, video=video, video_mime=video_mime)
+    return dict(t_arr=t_arr, ey=ey, peak_t=peak_t, expected=expected, energies=energies, db=db, anim=anim)
 
 
 def _pmc_validation_demo():
@@ -94,7 +94,7 @@ def _pmc_validation_demo():
     def _mark_cyl(ax, _cx=cx, _cy=cy, _a=a):
         ax.add_patch(plt.Circle((_cx / NM, _cy / NM), _a / NM, fill=False, color="k", lw=1.2))
 
-    video, video_mime = _safe_video(frames, grid.xd, grid.yd, "H_z(x,y) — scattering off a PMC cylinder", fps=16, mark_fn=_mark_cyl)
+    anim = _safe_video(frames, grid.xd, grid.yd, "H_z(x,y) — scattering off a PMC cylinder", fps=10, mark_fn=_mark_cyl)
     omega_max = pulse.omega_max(3.0)
     omega, spec = fft_frequency_response(np.array(obs.t), np.array(obs.Hz), band=(0.2 * omega_max, 0.75 * omega_max))
     pos = omega > 0
@@ -102,7 +102,7 @@ def _pmc_validation_demo():
     src_spec = pulse.spectrum_complex(omega_p) / ETA0
     response = spec_p / src_spec
     analytic = pmc_cylinder_hz(omega_p, rho_obs, phi_obs, a, nmax=40, kind="total", cyl_x=cx, cyl_y=cy)
-    return dict(f=omega_p / 2 / np.pi / 1e12, response=response, analytic=analytic, video=video, video_mime=video_mime)
+    return dict(f=omega_p / 2 / np.pi / 1e12, response=response, analytic=analytic, anim=anim)
 
 
 def _qm_demo():
@@ -126,8 +126,8 @@ def _qm_demo():
         if n % frame_every == 0:
             frames.append(np.abs(qm2.psi) ** 2)
     ts, xs, norms = np.array(ts), np.array(xs), np.array(norms)
-    video, video_mime = _safe_video(frames, qm2.x, qm2.y, "|Ψ(x,y)|² — displaced coherent state in the HO well",
-                                 cmap="viridis", symmetric=False, fps=14)
+    anim = _safe_video(frames, qm2.x, qm2.y, "|Ψ(x,y)|² — displaced coherent state in the HO well",
+                        cmap="viridis", symmetric=False, fps=10)
 
     # tiny resolution-convergence study (2 resolutions, short duration, for speed)
     conv = []
@@ -144,7 +144,7 @@ def _qm_demo():
         err = np.max(np.abs(np.array(xs3) - x0 * np.cos(omega * t3))) / x0
         conv.append((dxq / NM, err))
 
-    return dict(Ekin0=Ekin0, ts=ts, xs=xs, norms=norms, x0=x0, omega=omega, conv=conv, video=video, video_mime=video_mime)
+    return dict(Ekin0=Ekin0, ts=ts, xs=xs, norms=norms, x0=x0, omega=omega, conv=conv, anim=anim)
 
 
 def _run_all():
@@ -283,18 +283,17 @@ def _fig_qm(d):
 
 
 def _show_video(st, entry, key):
-    video, mime = entry.get("video"), entry.get("video_mime")
-    if video is None:
+    anim = entry.get("anim")
+    if not anim or not anim.get("gif"):
         st.info("Animation unavailable in this environment; static figures below still show the full result.")
         return
-    if mime == "video/mp4":
-        st.video(video)
-    else:
-        st.image(video, caption="Animated GIF (autoplays; MP4 wasn't available in this hosting "
-                                 "environment, so this portable fallback was used).")
-    st.download_button("⬇ Download this animation", data=video,
-                        file_name=f"{key}.{'mp4' if mime == 'video/mp4' else 'gif'}",
-                        mime=mime, key=f"{key}_dl")
+    st.image(anim["gif"])
+    c1, c2 = st.columns(2)
+    c1.download_button("⬇ Download animation (GIF)", data=anim["gif"],
+                        file_name=f"{key}.gif", mime="image/gif", key=f"{key}_gif_dl")
+    if anim.get("mp4"):
+        c2.download_button("⬇ Download animation (MP4)", data=anim["mp4"],
+                            file_name=f"{key}.mp4", mime="video/mp4", key=f"{key}_mp4_dl")
 
 
 def render_report(st):

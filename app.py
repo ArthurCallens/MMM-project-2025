@@ -33,7 +33,7 @@ from emqm.quantum import Schrodinger2D
 from emqm.sources import GaussianPulse, ModulatedGaussianPulse, RampedSine, fft_frequency_response
 from emqm.tfsf import PlaneWave
 from emqm.validation import dielectric_cylinder_hz, free_space_plane_wave_delay, pmc_cylinder_hz
-from video import field_frames_to_video, line_series_to_video
+from video import field_frames_to_gif, line_series_to_gif
 
 st.set_page_config(page_title="Hybrid QM/EM FDTD — Electrons in 2-D Wells", layout="wide")
 
@@ -72,22 +72,20 @@ def line_plot(xs, ys_dict, xlabel, ylabel, title, logy=False):
     return fig
 
 
-def show_video(video_bytes: bytes, mime: str, filename_base: str, key: str):
-    """Display a (bytes, mime) animation from video.py with the right widget, plus a
-    matching download button. Falls back gracefully (with a visible message) if even
-    the GIF encoder failed for some reason."""
-    if video_bytes is None:
+def show_video(anim: dict | None, filename_base: str, key: str):
+    """Display a {gif, mp4} animation dict from video.py: the GIF (via st.image) is the
+    guaranteed-to-render display; the MP4, when it built successfully, is offered as an
+    extra download for a proper scrubbable video file."""
+    if not anim or not anim.get("gif"):
         st.warning("Animation could not be generated in this environment.")
         return
-    if mime == "video/mp4":
-        st.video(video_bytes)
-        st.download_button("⬇ Download animation (MP4)", data=video_bytes,
-                            file_name=f"{filename_base}.mp4", mime="video/mp4", key=f"{key}_dl")
-    else:
-        st.image(video_bytes, caption="Animated GIF (autoplays; MP4 wasn't available in this "
-                                       "hosting environment, so this portable fallback was used).")
-        st.download_button("⬇ Download animation (GIF)", data=video_bytes,
-                            file_name=f"{filename_base}.gif", mime="image/gif", key=f"{key}_dl")
+    st.image(anim["gif"])
+    c1, c2 = st.columns(2)
+    c1.download_button("⬇ Download animation (GIF)", data=anim["gif"],
+                        file_name=f"{filename_base}.gif", mime="image/gif", key=f"{key}_gif_dl")
+    if anim.get("mp4"):
+        c2.download_button("⬇ Download animation (MP4)", data=anim["mp4"],
+                            file_name=f"{filename_base}.mp4", mime="video/mp4", key=f"{key}_mp4_dl")
 
 
 def safe_animate(fn, *args, **kwargs):
@@ -98,7 +96,7 @@ def safe_animate(fn, *args, **kwargs):
     except Exception as exc:  # pragma: no cover - defensive, environment-dependent
         st.warning(f"Could not build the animation in this environment ({exc}). "
                    "Everything else on this page is unaffected.")
-        return None, None
+        return None
 
 
 def scatterer_editor(key_prefix: str):
@@ -282,13 +280,13 @@ with tab_em:
             ax.plot(_ox / NM, _oy / NM, "k+", ms=10, mew=2)
 
         with st.spinner("Encoding field animation…"):
-            video_bytes, video_mime = safe_animate(field_frames_to_video, frames, grid.xd, grid.yd, "H_z(x,y)", mark_fn=mark_scatterers)
+            anim = safe_animate(field_frames_to_gif, frames, grid.xd, grid.yd, "H_z(x,y)", mark_fn=mark_scatterers)
 
         st.session_state["em_result"] = dict(
             grid=grid, fdtd=fdtd, obs=obs, frames=frames, elapsed=elapsed,
             scatterers=scatterers, profile=profile, wave=wave, theta_deg=theta_deg,
             obs_x=obs_x * NM, obs_y=obs_y * NM, dt=dt, nsteps=int(nsteps),
-            video=video_bytes, video_mime=video_mime,
+            anim=anim,
         )
 
     if "em_result" in st.session_state:
@@ -298,7 +296,7 @@ with tab_em:
                    f"({res['nsteps'] / max(res['elapsed'], 1e-9):.0f} steps/s, engine={fdtd.engine}).")
 
         st.markdown("#### Field animation")
-        show_video(res["video"], res["video_mime"], "em_field", key="em_video")
+        show_video(res["anim"], "em_field", key="em_video")
 
         st.markdown("#### Field snapshot (single frame, larger view)")
 
@@ -466,13 +464,13 @@ with tab_qm:
         prog.empty()
         elapsed = time.time() - t0
         with st.spinner("Encoding wavefunction-density animation…"):
-            video_bytes, video_mime = safe_animate(field_frames_to_video, frames, qm.x, qm.y, "|Ψ(x,y)|²", cmap="viridis", symmetric=False)
+            anim = safe_animate(field_frames_to_gif, frames, qm.x, qm.y, "|Ψ(x,y)|²", cmap="viridis", symmetric=False)
         st.session_state["qm_result"] = dict(
             qm=qm, frames=frames, ts=np.array(ts), xs=np.array(xs), ys=np.array(ys),
             pxs=np.array(pxs), pys=np.array(pys), Ts=np.array(Ts), norms=np.array(norms),
             cont_res=np.array(cont_res), elapsed=elapsed, nsteps=nsteps, omega_ho=omega_ho,
             state_kind=state_kind, x0=x0_nm * NM, y0=y0_nm * NM, drive_kind=drive_kind,
-            video=video_bytes, video_mime=video_mime,
+            anim=anim,
         )
 
     if "qm_result" in st.session_state:
@@ -482,7 +480,7 @@ with tab_qm:
                    f"({r['nsteps'] / max(r['elapsed'], 1e-9):.0f} steps/s). Final norm = {r['norms'][-1]:.10f}.")
 
         st.markdown("#### Wavefunction density |Ψ|² (animation)")
-        show_video(r["video"], r["video_mime"], "qm_density", key="qm_video")
+        show_video(r["anim"], "qm_density", key="qm_video")
 
         st.markdown("#### Wavefunction density (single frame, larger view)")
         idx = st.slider("Snapshot", 0, len(r["frames"]) - 1, len(r["frames"]) - 1, key="qm_frame")
@@ -609,11 +607,11 @@ with tab_coupled:
                 ax.plot(w.x0 / NM, w.y0 / NM, "kx", ms=10, mew=2)
 
         with st.spinner("Encoding field animation…"):
-            video_bytes, video_mime = safe_animate(field_frames_to_video, frames, grid.xd, grid.yd, "H_z(x,y)", mark_fn=mark_wells)
+            anim = safe_animate(field_frames_to_gif, frames, grid.xd, grid.yd, "H_z(x,y)", mark_fn=mark_wells)
 
         st.session_state["coupled_result"] = dict(grid=grid, fdtd=fdtd, wells=wells, frames=frames,
                                                     elapsed=elapsed, nsteps=int(nsteps),
-                                                    video=video_bytes, video_mime=video_mime)
+                                                    anim=anim)
 
     if "coupled_result" in st.session_state:
         r = st.session_state["coupled_result"]
@@ -622,7 +620,7 @@ with tab_coupled:
                    f"({r['nsteps'] / max(r['elapsed'], 1e-9):.0f} steps/s).")
 
         st.markdown("#### EM field animation, well centre(s) marked")
-        show_video(r["video"], r["video_mime"], "coupled_field", key="coupled_video")
+        show_video(r["anim"], "coupled_field", key="coupled_video")
 
         st.markdown("#### EM field snapshot (single frame, larger view)")
         idx = st.slider("Snapshot", 0, len(r["frames"]) - 1, len(r["frames"]) - 1, key="coupled_frame")

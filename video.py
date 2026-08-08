@@ -1,16 +1,16 @@
 """Turn a sequence of stored simulation frames into a playable animation, for the
 Streamlit app's video players and the Report tab.
 
-Two backends are tried, in order:
-1. MP4 (H.264) via a bundled static ffmpeg binary (imageio-ffmpeg) -- best UX
-   (scrubbing, pause, native `st.video` player), but requires spawning a subprocess,
-   which some restrictive hosting sandboxes disallow.
-2. Animated GIF via Pillow only (no subprocess, no external binary at all) -- works
-   anywhere Python/Pillow works, autoplays in the browser via `st.image`.
-
-Every public function returns `(bytes, mime_type)` so the caller can pick the right
-Streamlit widget (`st.video` for "video/mp4", `st.image` for "image/gif") without needing
-to know which backend actually succeeded.
+**Animated GIF (via Pillow) is the primary, guaranteed-to-render format.** It needs no
+subprocess, no external binary, and no video-codec/browser negotiation at all -- a
+browser plays an animated GIF the instant it displays the image, via plain `<img>`
+semantics, which is about as close to "always works" as the web platform gets. This
+matters because MP4 playback turned out to be unreliable across hosting environments
+(sandboxed subprocess restrictions, and separately a libx264 "odd pixel dimensions"
+failure mode) -- rather than keep chasing every possible host-specific MP4 failure mode,
+GIF is used for on-screen display everywhere, with MP4 offered as a best-effort *download*
+option when it happens to build successfully (smaller file, scrubbable player, for users
+who save it and open it in a real video player).
 """
 from __future__ import annotations
 
@@ -28,30 +28,6 @@ from PIL import Image
 log = logging.getLogger(__name__)
 
 
-def _encode_mp4(rgb_frames: list[np.ndarray], fps: int) -> bytes:
-    import imageio.v2 as imageio
-
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-        path = tmp.name
-    writer = imageio.get_writer(path, format="FFMPEG", fps=fps, codec="libx264",
-                                 quality=7, macro_block_size=1, pixelformat="yuv420p")
-    try:
-        for rgb in rgb_frames:
-            writer.append_data(rgb)
-    finally:
-        writer.close()
-    with open(path, "rb") as f:
-        return f.read()
-
-
-def _encode_gif(rgb_frames: list[np.ndarray], fps: int) -> bytes:
-    images = [Image.fromarray(rgb).convert("P", palette=Image.ADAPTIVE, colors=200) for rgb in rgb_frames]
-    buf = io.BytesIO()
-    images[0].save(buf, format="GIF", save_all=True, append_images=images[1:],
-                    duration=int(1000 / fps), loop=0, optimize=True)
-    return buf.getvalue()
-
-
 def _even(rgb: np.ndarray) -> np.ndarray:
     """H.264/yuv420p requires even width and height; crop by (at most) one row/column
     of pixels if matplotlib's rendered canvas came out odd (it very often does, since
@@ -60,21 +36,70 @@ def _even(rgb: np.ndarray) -> np.ndarray:
     return rgb[: h - (h % 2), : w - (w % 2)]
 
 
-def _encode(rgb_frames: list[np.ndarray], fps: int) -> tuple[bytes, str]:
-    rgb_frames = [_even(f) for f in rgb_frames]
+def _render_rgb_frames(update_fn, n_frames: int, fig, hold_last: int) -> list[np.ndarray]:
+    rgb_frames = []
+    for i in range(n_frames):
+        update_fn(i)
+        fig.canvas.draw()
+        rgb_frames.append(np.asarray(fig.canvas.buffer_rgba())[..., :3].copy())
+    for _ in range(hold_last):
+        rgb_frames.append(rgb_frames[-1])
+    return rgb_frames
+
+
+def _encode_gif(rgb_frames: list[np.ndarray], fps: int) -> bytes:
+    """Encode as an animated GIF with a *shared* palette built from a sample spanning the
+    whole animation (not just the first frame, which -- e.g. before a pulse has switched
+    on -- is often blank/near-uniform: quantizing every later, more colourful frame down
+    to a palette derived only from a blank first frame crushes all the real content
+    toward that frame's colour, i.e. makes the whole animation look empty)."""
+    n = len(rgb_frames)
+    sample_idx = np.linspace(0, n - 1, min(10, n)).astype(int)
+    composite = np.concatenate([rgb_frames[i] for i in sample_idx], axis=0)
+    palette_img = Image.fromarray(composite).convert("P", palette=Image.ADAPTIVE, colors=256)
+
+    images = [Image.fromarray(rgb).quantize(palette=palette_img, dither=Image.FLOYDSTEINBERG) for rgb in rgb_frames]
+    buf = io.BytesIO()
+    images[0].save(buf, format="GIF", save_all=True, append_images=images[1:],
+                    duration=int(1000 / fps), loop=0, optimize=False, disposal=2)
+    return buf.getvalue()
+
+
+def _encode_mp4(rgb_frames: list[np.ndarray], fps: int) -> bytes | None:
+    """Best-effort MP4 encode; returns None (never raises) if it doesn't work in this
+    environment (missing/blocked ffmpeg subprocess, codec issue, etc.)."""
     try:
-        return _encode_mp4(rgb_frames, fps), "video/mp4"
+        import imageio.v2 as imageio
+
+        frames = [_even(f) for f in rgb_frames]
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            path = tmp.name
+        writer = imageio.get_writer(
+            path, format="FFMPEG", fps=fps, codec="libx264", quality=7,
+            macro_block_size=1, pixelformat="yuv420p",
+            output_params=["-movflags", "+faststart", "-profile:v", "baseline", "-level", "3.0"],
+        )
+        try:
+            for rgb in frames:
+                writer.append_data(rgb)
+        finally:
+            writer.close()
+        with open(path, "rb") as f:
+            data = f.read()
+        return data if len(data) > 200 else None  # guard against a silently-empty file
     except Exception as exc:  # pragma: no cover - depends on host sandboxing
-        log.warning("MP4 (ffmpeg) encoding failed (%s); falling back to animated GIF.", exc)
-        return _encode_gif(rgb_frames, fps), "image/gif"
+        log.warning("MP4 (ffmpeg) encoding unavailable (%s); GIF is used for display anyway.", exc)
+        return None
 
 
-def field_frames_to_video(frames, xs, ys, title, cmap="RdBu_r", symmetric=True, unit="nm",
-                           fps=10, mark_fn=None, dpi=90, figsize=(4.6, 3.9), hold_last=True) -> tuple[bytes, str]:
+def field_frames_to_gif(frames, xs, ys, title, cmap="RdBu_r", symmetric=True, unit="nm",
+                         fps=8, mark_fn=None, dpi=80, figsize=(4.4, 3.7),
+                         hold_last=2, also_mp4=True) -> dict:
     """Render a list of 2-D field snapshots into a playable animation.
 
-    Returns `(bytes, mime_type)` -- pass `mime_type == "video/mp4"` results to
-    `st.video(...)` and `"image/gif"` results to `st.image(...)`.
+    Returns a dict with `gif` (bytes, always present) and `mp4` (bytes or None,
+    best-effort). Use `gif` for on-screen `st.image(...)` display (guaranteed to work);
+    offer `mp4` as an optional download when not None.
     """
     if not frames:
         raise ValueError("no frames to render")
@@ -84,8 +109,12 @@ def field_frames_to_video(frames, xs, ys, title, cmap="RdBu_r", symmetric=True, 
     kwargs = dict(vmin=-vmax, vmax=vmax) if symmetric else dict(vmin=0.0, vmax=vmax)
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+    # NB: deliberately no animated=True here -- that flag tells matplotlib this artist
+    # is blit-managed and should be *skipped* during a normal full canvas.draw(), which
+    # is exactly what we call per-frame below (no blitting). Setting it silently produced
+    # blank frames (axes/colorbar drawn, image itself never rendered).
     im = ax.imshow(frames[0].T, origin="lower", extent=[x0, x1, y0, y1], cmap=cmap,
-                    aspect="equal", animated=True, **kwargs)
+                    aspect="equal", **kwargs)
     ax.set_xlabel(f"x [{unit}]")
     ax.set_ylabel(f"y [{unit}]")
     title_artist = ax.set_title(title)
@@ -94,31 +123,30 @@ def field_frames_to_video(frames, xs, ys, title, cmap="RdBu_r", symmetric=True, 
     fig.colorbar(im, ax=ax, shrink=0.85)
     fig.tight_layout()
 
-    rgb_frames = []
+    def update(i):
+        im.set_data(frames[i].T)
+        title_artist.set_text(f"{title}  (frame {i + 1}/{len(frames)})")
+
     try:
-        for i, frame in enumerate(frames):
-            im.set_data(frame.T)
-            title_artist.set_text(f"{title}  (frame {i + 1}/{len(frames)})")
-            fig.canvas.draw()
-            rgb_frames.append(np.asarray(fig.canvas.buffer_rgba())[..., :3].copy())
-        if hold_last:
-            for _ in range(max(1, fps // 2)):
-                rgb_frames.append(rgb_frames[-1])
+        rgb_frames = _render_rgb_frames(update, len(frames), fig, hold_last=max(1, hold_last))
     finally:
         plt.close(fig)
 
-    return _encode(rgb_frames, fps)
+    gif_bytes = _encode_gif(rgb_frames, fps)
+    mp4_bytes = _encode_mp4(rgb_frames, fps) if also_mp4 else None
+    return dict(gif=gif_bytes, mp4=mp4_bytes)
 
 
-def line_series_to_video(t, series: dict, xlabel, ylabel, title, fps=15, dpi=90,
-                          figsize=(6.0, 3.6)) -> tuple[bytes, str]:
+def line_series_to_gif(t, series: dict, xlabel, ylabel, title, fps=12, dpi=80,
+                        figsize=(5.6, 3.3), also_mp4=True) -> dict:
     """Render a growing line plot (e.g. an expectation value catching up to the current
-    time) as a playable animation. Returns `(bytes, mime_type)` -- see field_frames_to_video."""
+    time) as a playable animation. Returns the same `{gif, mp4}` dict as
+    `field_frames_to_gif`."""
     t = np.asarray(t)
     n = len(t)
     if n == 0:
         raise ValueError("no data to render")
-    n_frames = min(n, 90)
+    n_frames = min(n, 60)
     idxs = np.linspace(1, n, n_frames).astype(int)
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
@@ -138,16 +166,16 @@ def line_series_to_video(t, series: dict, xlabel, ylabel, title, fps=15, dpi=90,
         ax.legend(fontsize=8)
     fig.tight_layout()
 
-    rgb_frames = []
+    def update(k_idx):
+        k = idxs[k_idx]
+        for label, ys in series.items():
+            lines[label].set_data(t[:k], np.asarray(ys)[:k])
+
     try:
-        for k in idxs:
-            for label, ys in series.items():
-                lines[label].set_data(t[:k], np.asarray(ys)[:k])
-            fig.canvas.draw()
-            rgb_frames.append(np.asarray(fig.canvas.buffer_rgba())[..., :3].copy())
-        for _ in range(max(1, fps // 2)):
-            rgb_frames.append(rgb_frames[-1])
+        rgb_frames = _render_rgb_frames(update, n_frames, fig, hold_last=max(1, fps // 3))
     finally:
         plt.close(fig)
 
-    return _encode(rgb_frames, fps)
+    gif_bytes = _encode_gif(rgb_frames, fps)
+    mp4_bytes = _encode_mp4(rgb_frames, fps) if also_mp4 else None
+    return dict(gif=gif_bytes, mp4=mp4_bytes)
