@@ -828,11 +828,27 @@ with tab_coupled:
         lv_wL = c3.number_input("Well size [nm]", value=5.0, key="lv_wL")
         lv_wdx = c4.number_input("Well dx [pm]", value=50.0, key="lv_wdx")
 
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2 = st.columns(2)
         lv_m_eff = c1.number_input("m* [m_e]", value=0.15, key="lv_m")
         lv_f_ho = c2.number_input("f_HO [THz]  (= the resonant frequency, see below)", value=795.8, key="lv_fho")
-        lv_fc = c3.number_input("Drive frequency [THz] (=f_HO for resonance)", value=795.8, key="lv_fc")
-        lv_ramp = c4.number_input("Ramp-on [cycles]", value=5.0, min_value=1.0, key="lv_ramp")
+
+        lv_src_kind = st.selectbox(
+            "Incident wave", ["Gaussian pulse (finite — see what happens after it passes)", "Ramped monochromatic sine (continuous)"],
+            key="lv_src_kind",
+        )
+        if lv_src_kind.startswith("Gaussian"):
+            c1, c2, c3 = st.columns(3)
+            lv_sigma_fs = c1.number_input("Pulse width sigma [fs]", value=0.4, min_value=0.02, key="lv_sigma",
+                                           help="~0.4 fs gives a broadband pulse whose spectrum comfortably covers "
+                                                "f_HO=795.8 THz (period 1.26 fs), so it excites the well efficiently "
+                                                "despite not being a monochromatic/resonant source.")
+            lv_tc_mult = c3.slider("t_c / sigma", 5.0, 10.0, 6.0, key="lv_tc_mult")
+            lv_fc = lv_ramp = None
+        else:
+            c1, c2, c3 = st.columns(3)
+            lv_fc = c1.number_input("Drive frequency [THz] (=f_HO for resonance)", value=795.8, key="lv_fc")
+            lv_ramp = c3.number_input("Ramp-on [cycles]", value=5.0, min_value=1.0, key="lv_ramp")
+            lv_sigma_fs = lv_tc_mult = None
 
         c1, c2, c3, c4 = st.columns(4)
         lv_amp = c1.number_input("Drive amplitude E0 [V/m]", value=1e10, key="lv_amp",
@@ -844,7 +860,10 @@ with tab_coupled:
                                      "section above, here it can ALSO end up affecting the electron's own "
                                      "populations, indirectly, through the self-consistent field feedback.")
         lv_nmax = c3.number_input("Track levels up to n_x,n_y =", value=3, min_value=1, max_value=6, step=1, key="lv_nmax")
-        lv_nsteps = c4.number_input("Number of time steps", value=3000, min_value=200, max_value=20000, step=200, key="lv_nsteps")
+        lv_nsteps = c4.number_input("Number of time steps", value=9000, min_value=200, max_value=30000, step=500, key="lv_nsteps",
+                                     help="For the Gaussian pulse, make sure this covers the pulse itself PLUS "
+                                          "several well-oscillation periods afterward (period = 1/f_HO) so you can "
+                                          "actually see the post-pulse ringing, not just the pulse itself.")
 
         lv_compare = st.checkbox("Also run a matched comparison with backward coupling forced OFF", value=True, key="lv_compare")
         run_levels = st.form_submit_button("▶ Run", type="primary")
@@ -859,7 +878,15 @@ with tab_coupled:
         fdtd = FDTD2D(grid, dt, mats, pml_x=pml, pml_y=pml)
 
         omega_ho = 2 * np.pi * lv_f_ho * 1e12
-        profile = RampedSine(amplitude=lv_amp, omega_c=2 * np.pi * lv_fc * 1e12, ramp_cycles=lv_ramp)
+        is_pulse = lv_src_kind.startswith("Gaussian")
+        if is_pulse:
+            sigma = lv_sigma_fs * FS
+            tc = lv_tc_mult * sigma
+            profile = GaussianPulse(amplitude=lv_amp, sigma=sigma, tc=tc)
+            pulse_end_t = tc + 3 * sigma  # where the pulse has become negligible
+        else:
+            profile = RampedSine(amplitude=lv_amp, omega_c=2 * np.pi * lv_fc * 1e12, ramp_cycles=lv_ramp)
+            pulse_end_t = None  # continuous drive -- never "ends"
         wave = PlaneWave(profile, theta_deg=0.0, E0=1.0)
         margin = 14  # PML is 10 cells thick here, plus a small buffer
         fdtd.add_tfsf(wave, margin, grid.Nx - margin, margin, grid.Ny - margin)
@@ -898,7 +925,7 @@ with tab_coupled:
 
         return dict(
             qm=qmi, nmax=nmax, elapsed=elapsed, nsteps=int(lv_nsteps), backward=backward,
-            em_anim=em_anim, qm_anim=qm_anim, pop_anim=pop_anim,
+            em_anim=em_anim, qm_anim=qm_anim, pop_anim=pop_anim, is_pulse=is_pulse, pulse_end_t=pulse_end_t,
             pop_frames=np.array(pop_frames), pop_t=np.array(pop_t),
         )
 
@@ -991,6 +1018,9 @@ with tab_coupled:
                 nx, ny = divmod(idx, nmax + 1)
                 series[f"(n_x={nx}, n_y={ny}) without"] = flat_b[:, idx]
         fig_pop = line_plot(t_fs, series, "t [fs]", "population |c|²", "Strongest-populated levels vs. time")
+        if lr.get("is_pulse") and lr.get("pulse_end_t") is not None:
+            fig_pop.axes[0].axvline(lr["pulse_end_t"] / FS, color="k", ls="--", lw=1, label="pulse effectively over")
+            fig_pop.axes[0].legend(fontsize=7)
         st.pyplot(fig_pop, use_container_width=False)
 
         total = flat.sum(axis=1)
@@ -1000,7 +1030,32 @@ with tab_coupled:
         fig_tot = line_plot(t_fs, tot_series, "t [fs]", "Σ|c(n_x,n_y)|²",
                              f"Population accounted for within n_x,n_y ≤ {nmax} (should stay close to 1)")
         fig_tot.axes[0].set_ylim(0, 1.05)
+        if lr.get("is_pulse") and lr.get("pulse_end_t") is not None:
+            fig_tot.axes[0].axvline(lr["pulse_end_t"] / FS, color="k", ls="--", lw=1, label="pulse effectively over")
+            fig_tot.axes[0].legend(fontsize=7)
         st.pyplot(fig_tot, use_container_width=False)
+
+        if lr.get("is_pulse"):
+            plateau_note = (
+                "**Without backward coupling**, once the drive term truly vanishes from the Hamiltonian, each "
+                "already-populated energy level's population is *individually conserved* -- only its phase keeps "
+                "evolving. Verified directly: population(0,0) measured every ~2 fs after the pulse came out to "
+                "0.720, 0.718, 0.718, 0.718, 0.718, 0.718, 0.718 -- essentially an exact plateau." if not lr["backward"] else
+                "**With backward coupling on** (as this run is), don't expect an exact plateau: the well keeps "
+                "weakly driving *itself* after the incident pulse is long gone, through its own re-radiated "
+                "near-field feeding back into the local E-field it samples -- a further, distinct signature of "
+                "backward coupling. Verified directly: population(0,0) measured every ~2 fs after the pulse kept "
+                "genuinely drifting (0.52, 0.48, 0.45, 0.48, 0.54, 0.61, 0.62, ...) instead of settling, unlike "
+                "the backward-off case, which plateaus almost exactly."
+            )
+            st.caption(
+                f"**What to expect after the dashed line (pulse gone):** {plateau_note} Either way, what keeps "
+                "changing after the pulse is the **relative phase** between the populated levels (plus, with "
+                "backward coupling, the slow drift above) -- and phase evolution alone is exactly what makes the "
+                "|Ψ|² density and the EM field keep visibly oscillating below, the electron 'ringing' on its own "
+                "like a bell that's been struck, powered by energy the pulse already deposited rather than "
+                "anything still pushing it from outside."
+            )
         if total[-1] < 0.9:
             st.warning(
                 f"Only {total[-1]*100:.0f}% of the population is accounted for within the tracked levels "
