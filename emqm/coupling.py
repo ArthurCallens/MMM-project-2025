@@ -126,12 +126,12 @@ class CoupledSimulation:
         extra_Jx = np.zeros_like(self.fdtd.Ex)
         extra_Jy = np.zeros_like(self.fdtd.Ey)
 
-        drives = []
+        drives_before = []
         for well in self.wells:
             ex, ey = self.fdtd.e_field_at(well.x0, well.y0)
-            drives.append((ex, ey))
+            drives_before.append((ex, ey))
 
-        for well, prep, (ex, ey) in zip(self.wells, self._prep, drives):
+        for well, prep, (ex, ey) in zip(self.wells, self._prep, drives_before):
             if well.backward_coupling:
                 jx_full, jy_full = self._deposit(well, prep)
                 extra_Jx += jx_full
@@ -139,6 +139,16 @@ class CoupledSimulation:
 
         self.fdtd.step(extra_Jx if self.wells else None, extra_Jy if self.wells else None)
 
-        for well, (ex, ey) in zip(self.wells, drives):
-            well.qm.step(dt, Ex=ex, Ey=ey)
-            well.record(ex, ey)
+        # Schrodinger2D.step() expects a time-centred field (its own docstring says so), i.e.
+        # the average of the field just before and just after this dt -- NOT the stale
+        # pre-update sample. Using the stale sample introduces an O(dt) time-lag error in the
+        # well's own self-consistent radiation feedback that, left uncorrected, shows up as
+        # spurious energy GAIN (numerically unstable "anti-damping") instead of the physically
+        # correct radiation damping, growing with N and the coupling step size. Verified: the
+        # error shrinks close to linearly as dt -> 0 (confirming a time-centering artifact, not
+        # a sign error in the physics), and this fix removes it.
+        for well, (ex0, ey0) in zip(self.wells, drives_before):
+            ex1, ey1 = self.fdtd.e_field_at(well.x0, well.y0)
+            ex_c, ey_c = 0.5 * (ex0 + ex1), 0.5 * (ey0 + ey1)
+            well.qm.step(dt, Ex=ex_c, Ey=ey_c)
+            well.record(ex_c, ey_c)
