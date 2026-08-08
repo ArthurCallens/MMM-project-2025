@@ -1,27 +1,80 @@
-"""Turn a sequence of stored simulation frames into a playable MP4, for the Streamlit
-app's video players and the Report tab. Uses a bundled static ffmpeg binary
-(via imageio-ffmpeg) so it works with no system-level ffmpeg install.
+"""Turn a sequence of stored simulation frames into a playable animation, for the
+Streamlit app's video players and the Report tab.
+
+Two backends are tried, in order:
+1. MP4 (H.264) via a bundled static ffmpeg binary (imageio-ffmpeg) -- best UX
+   (scrubbing, pause, native `st.video` player), but requires spawning a subprocess,
+   which some restrictive hosting sandboxes disallow.
+2. Animated GIF via Pillow only (no subprocess, no external binary at all) -- works
+   anywhere Python/Pillow works, autoplays in the browser via `st.image`.
+
+Every public function returns `(bytes, mime_type)` so the caller can pick the right
+Streamlit widget (`st.video` for "video/mp4", `st.image` for "image/gif") without needing
+to know which backend actually succeeded.
 """
 from __future__ import annotations
 
+import io
+import logging
 import tempfile
 
-import imageio.v2 as imageio
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from PIL import Image
+
+log = logging.getLogger(__name__)
 
 
-def field_frames_to_mp4(frames, xs, ys, title, cmap="RdBu_r", symmetric=True, unit="nm",
-                         fps=10, mark_fn=None, dpi=110, figsize=(5.0, 4.2)) -> bytes:
-    """Render a list of 2-D field snapshots (same shape as `frames[0]`) into an MP4.
+def _encode_mp4(rgb_frames: list[np.ndarray], fps: int) -> bytes:
+    import imageio.v2 as imageio
 
-    `frames`: list of 2-D numpy arrays (all the same shape).
-    `xs`, `ys`: coordinate arrays (metres) matching the frame's axes, used for the extent.
-    `mark_fn(ax)`: optional callback to draw extra static annotations (scatterer outlines,
-    well markers, ...) on every frame.
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        path = tmp.name
+    writer = imageio.get_writer(path, format="FFMPEG", fps=fps, codec="libx264",
+                                 quality=7, macro_block_size=1, pixelformat="yuv420p")
+    try:
+        for rgb in rgb_frames:
+            writer.append_data(rgb)
+    finally:
+        writer.close()
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def _encode_gif(rgb_frames: list[np.ndarray], fps: int) -> bytes:
+    images = [Image.fromarray(rgb).convert("P", palette=Image.ADAPTIVE, colors=200) for rgb in rgb_frames]
+    buf = io.BytesIO()
+    images[0].save(buf, format="GIF", save_all=True, append_images=images[1:],
+                    duration=int(1000 / fps), loop=0, optimize=True)
+    return buf.getvalue()
+
+
+def _even(rgb: np.ndarray) -> np.ndarray:
+    """H.264/yuv420p requires even width and height; crop by (at most) one row/column
+    of pixels if matplotlib's rendered canvas came out odd (it very often does, since
+    figsize*dpi rarely lands on an even integer by chance)."""
+    h, w = rgb.shape[:2]
+    return rgb[: h - (h % 2), : w - (w % 2)]
+
+
+def _encode(rgb_frames: list[np.ndarray], fps: int) -> tuple[bytes, str]:
+    rgb_frames = [_even(f) for f in rgb_frames]
+    try:
+        return _encode_mp4(rgb_frames, fps), "video/mp4"
+    except Exception as exc:  # pragma: no cover - depends on host sandboxing
+        log.warning("MP4 (ffmpeg) encoding failed (%s); falling back to animated GIF.", exc)
+        return _encode_gif(rgb_frames, fps), "image/gif"
+
+
+def field_frames_to_video(frames, xs, ys, title, cmap="RdBu_r", symmetric=True, unit="nm",
+                           fps=10, mark_fn=None, dpi=90, figsize=(4.6, 3.9), hold_last=True) -> tuple[bytes, str]:
+    """Render a list of 2-D field snapshots into a playable animation.
+
+    Returns `(bytes, mime_type)` -- pass `mime_type == "video/mp4"` results to
+    `st.video(...)` and `"image/gif"` results to `st.image(...)`.
     """
     if not frames:
         raise ValueError("no frames to render")
@@ -41,32 +94,26 @@ def field_frames_to_mp4(frames, xs, ys, title, cmap="RdBu_r", symmetric=True, un
     fig.colorbar(im, ax=ax, shrink=0.85)
     fig.tight_layout()
 
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-        path = tmp.name
-    writer = imageio.get_writer(path, format="FFMPEG", fps=fps, codec="libx264",
-                                 quality=7, macro_block_size=1, pixelformat="yuv420p")
+    rgb_frames = []
     try:
         for i, frame in enumerate(frames):
             im.set_data(frame.T)
             title_artist.set_text(f"{title}  (frame {i + 1}/{len(frames)})")
             fig.canvas.draw()
-            rgb = np.asarray(fig.canvas.buffer_rgba())[..., :3]
-            writer.append_data(rgb)
-        # hold on the last frame for a beat so playback doesn't feel cut off
-        for _ in range(max(1, fps // 2)):
-            writer.append_data(rgb)
+            rgb_frames.append(np.asarray(fig.canvas.buffer_rgba())[..., :3].copy())
+        if hold_last:
+            for _ in range(max(1, fps // 2)):
+                rgb_frames.append(rgb_frames[-1])
     finally:
-        writer.close()
         plt.close(fig)
 
-    with open(path, "rb") as f:
-        return f.read()
+    return _encode(rgb_frames, fps)
 
 
-def line_series_to_mp4(t, series: dict, xlabel, ylabel, title, fps=15, dpi=110,
-                        figsize=(6.0, 3.6), window=None) -> bytes:
-    """Render a growing line/scatter plot (e.g. an expectation value catching up to the
-    current time) as an MP4 -- a small animated "value vs. time" video."""
+def line_series_to_video(t, series: dict, xlabel, ylabel, title, fps=15, dpi=90,
+                          figsize=(6.0, 3.6)) -> tuple[bytes, str]:
+    """Render a growing line plot (e.g. an expectation value catching up to the current
+    time) as a playable animation. Returns `(bytes, mime_type)` -- see field_frames_to_video."""
     t = np.asarray(t)
     n = len(t)
     if n == 0:
@@ -91,22 +138,16 @@ def line_series_to_mp4(t, series: dict, xlabel, ylabel, title, fps=15, dpi=110,
         ax.legend(fontsize=8)
     fig.tight_layout()
 
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
-        path = tmp.name
-    writer = imageio.get_writer(path, format="FFMPEG", fps=fps, codec="libx264",
-                                 quality=7, macro_block_size=1, pixelformat="yuv420p")
+    rgb_frames = []
     try:
         for k in idxs:
             for label, ys in series.items():
                 lines[label].set_data(t[:k], np.asarray(ys)[:k])
             fig.canvas.draw()
-            rgb = np.asarray(fig.canvas.buffer_rgba())[..., :3]
-            writer.append_data(rgb)
+            rgb_frames.append(np.asarray(fig.canvas.buffer_rgba())[..., :3].copy())
         for _ in range(max(1, fps // 2)):
-            writer.append_data(rgb)
+            rgb_frames.append(rgb_frames[-1])
     finally:
-        writer.close()
         plt.close(fig)
 
-    with open(path, "rb") as f:
-        return f.read()
+    return _encode(rgb_frames, fps)
