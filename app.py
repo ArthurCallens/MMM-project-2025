@@ -560,14 +560,17 @@ with tab_coupled:
                 well_cfgs.append(dict(x=wx, y=wy, L=wL, dx=wdx, m_eff=m_eff_frac, f_ho=f_ho_thz, N=N_line * 1e7, backward=backward))
 
         nsteps = st.number_input("Number of time steps", value=1200, min_value=100, max_value=20000, step=100)
+        do_compare = st.checkbox(
+            "Also run a matched comparison with backward coupling forced OFF (runs the simulation twice, "
+            "same random-free setup both times, so you can directly see what backward coupling changes)",
+            value=True,
+        )
         run_coupled = st.form_submit_button("▶ Run coupled simulation", type="primary")
 
-    if run_coupled:
+    def _run_coupled_once(force_backward_off: bool):
         Lx = Ly = Lx_nm * NM
         dx = dx_nm * NM
-        x = uniform_axis(Lx, dx)
-        y = uniform_axis(Ly, dx)
-        grid = Grid2D(x, y)
+        grid = Grid2D(uniform_axis(Lx, dx), uniform_axis(Ly, dx))
         mats = build_material_maps(grid, [])
         dt = grid.cfl_dt(courant)
         pml = PMLParams(thickness=pml_nm * NM)
@@ -584,43 +587,121 @@ with tab_coupled:
             qmi = Schrodinger2D(Lx=cfg["L"] * NM, Ly=cfg["L"] * NM, dx=cfg["dx"] * 1e-12,
                                  m_eff=cfg["m_eff"] * ME, omega_ho=omega_ho)
             qmi.set_state(qmi.ground_state())
+            backward = False if force_backward_off else cfg["backward"]
             wells.append(Well(qm=qmi, x0=cfg["x"] * NM, y0=cfg["y"] * NM, N=cfg["N"],
-                               backward_coupling=cfg["backward"], label=f"well {i + 1}"))
+                               backward_coupling=backward, label=f"well {i + 1}"))
+
+        # a downstream monitor point just past the first well, along the propagation
+        # direction -- this is where a re-radiated wavelet from backward coupling shows
+        # up most clearly, since it sees the well's dipole field directly
+        theta = np.deg2rad(theta_deg)
+        mon_x = well_cfgs[0]["x"] * NM + 8 * NM * np.cos(theta)
+        mon_y = well_cfgs[0]["y"] * NM + 8 * NM * np.sin(theta)
+        monitor = fdtd.add_observer(mon_x, mon_y, "downstream monitor")
 
         coupled = CoupledSimulation(fdtd, wells)
         n_frames = 40
         frame_every = max(1, int(nsteps) // n_frames)
         frames = []
-        prog = st.progress(0.0, text="Running coupled EM/QM…")
+        label = "baseline (no backward coupling)" if force_backward_off else "as configured"
+        prog = st.progress(0.0, text=f"Running coupled EM/QM ({label})…")
         t0 = time.time()
         for n in range(int(nsteps)):
             coupled.step()
             if n % frame_every == 0:
                 frames.append(fdtd.Hz.copy())
             if n % max(1, int(nsteps) // 20) == 0:
-                prog.progress(min(1.0, (n + 1) / nsteps), text=f"Running coupled EM/QM… step {n + 1}/{int(nsteps)}")
+                prog.progress(min(1.0, (n + 1) / nsteps), text=f"Running coupled EM/QM ({label})… step {n + 1}/{int(nsteps)}")
         prog.empty()
         elapsed = time.time() - t0
 
-        def mark_wells(ax, _wells=wells):
+        def mark_wells(ax, _wells=wells, _mx=mon_x, _my=mon_y):
             for w in _wells:
                 ax.plot(w.x0 / NM, w.y0 / NM, "kx", ms=10, mew=2)
+            ax.plot(_mx / NM, _my / NM, "g^", ms=8, mew=1.5)
 
-        with st.spinner("Encoding field animation…"):
+        with st.spinner(f"Encoding field animation ({label})…"):
             anim = safe_animate(field_frames_to_gif, frames, grid.xd, grid.yd, "H_z(x,y)", mark_fn=mark_wells)
 
-        st.session_state["coupled_result"] = dict(grid=grid, fdtd=fdtd, wells=wells, frames=frames,
-                                                    elapsed=elapsed, nsteps=int(nsteps),
-                                                    anim=anim)
+        return dict(grid=grid, fdtd=fdtd, wells=wells, frames=frames, elapsed=elapsed,
+                    nsteps=int(nsteps), anim=anim, monitor=monitor, any_backward=any(w.backward_coupling for w in wells))
+
+    if run_coupled:
+        st.session_state["coupled_result"] = _run_coupled_once(force_backward_off=False)
+        st.session_state["coupled_baseline"] = _run_coupled_once(force_backward_off=True) if do_compare else None
 
     if "coupled_result" in st.session_state:
         r = st.session_state["coupled_result"]
+        baseline = st.session_state.get("coupled_baseline")
         grid, fdtd, wells = r["grid"], r["fdtd"], r["wells"]
         st.success(f"Done: {r['nsteps']} steps, wall time {r['elapsed']:.2f} s "
                    f"({r['nsteps'] / max(r['elapsed'], 1e-9):.0f} steps/s).")
+        if not r["any_backward"]:
+            st.info("All wells currently have backward coupling **off**, so this run is a pure "
+                    "forward-only (EM -> QM) baseline: the incident field drives the well, but the "
+                    "well does not radiate back into the EM grid. Turn a well's checkbox on, or use "
+                    "the comparison option below, to see the difference.")
 
-        st.markdown("#### EM field animation, well centre(s) marked")
+        st.markdown("#### EM field animation, well centre(s) marked (green triangle = downstream monitor point)")
         show_video(r["anim"], "coupled_field", key="coupled_video")
+
+        if baseline is not None:
+            st.markdown("---")
+            st.markdown("### 👉 Backward coupling: with vs. without")
+            st.caption(
+                "Both runs below use *identical* geometry, well parameters and incident pulse; the only "
+                "difference is whether each well's quantum current is fed back into the EM update. "
+                "Any difference you see is therefore caused entirely by backward coupling."
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("**With backward coupling (as configured)**")
+                show_video(r["anim"], "coupled_field_with_backward", key="coupled_video_with")
+            with c2:
+                st.markdown("**Without backward coupling (baseline)**")
+                show_video(baseline["anim"], "coupled_field_without_backward", key="coupled_video_without")
+
+            st.markdown("#### Downstream H_z field: with vs. without backward coupling")
+            t_fs = np.array(r["monitor"].t) / FS
+            hz_with = np.array(r["monitor"].Hz)
+            hz_without = np.array(baseline["monitor"].Hz)
+            diff = hz_with - hz_without
+            rel = np.abs(diff).max() / max(np.abs(hz_with).max(), 1e-300)
+            c1, c2 = st.columns(2)
+            with c1:
+                fig_cmp = line_plot(
+                    t_fs, {"with backward coupling": hz_with, "without (baseline)": hz_without},
+                    "t [fs]", "H_z at monitor point", "Total field (dominated by the incident pulse)",
+                )
+                st.pyplot(fig_cmp, use_container_width=False)
+            with c2:
+                fig_diff = line_plot(
+                    t_fs, {"ΔH_z = with − without": diff},
+                    "t [fs]", "ΔH_z at monitor point", "Re-radiated field (backward-coupling contribution only)",
+                )
+                st.pyplot(fig_diff, use_container_width=False)
+            st.caption(
+                f"The left plot's two curves overlap almost exactly (the incident pulse, ~{np.abs(hz_with).max():.3g}, "
+                f"dominates the total field) -- that's expected and correct, not a sign that backward coupling "
+                f"did nothing. The **right plot isolates the difference**: max |ΔH_z| = {np.abs(diff).max():.3e} "
+                f"({rel:.2e} relative to the incident pulse), the well's re-radiated field made visible on its "
+                "own scale -- this is backward coupling. It's a small fraction of the total field because a "
+                "single electron's dipole radiation is intrinsically weak compared to the driving pulse "
+                "(exactly as it should be physically); increasing the particle density N, adding more driven "
+                "wells, or driving closer to the well's resonance (f_HO) all make it larger."
+            )
+
+            st.markdown("#### Well dipole trajectory: with vs. without backward coupling")
+            for w_with, w_without in zip(wells, baseline["wells"]):
+                th = w_with.history
+                th_b = w_without.history
+                fig_x = line_plot(
+                    np.array(th["t"]) / FS,
+                    {f"{w_with.label}: <x> with backward": np.array(th["x"]) / NM,
+                     f"{w_with.label}: <x> without (baseline)": np.array(th_b["x"]) / NM},
+                    "t [fs]", "<x> [nm]", f"{w_with.label} — electron trajectory",
+                )
+                st.pyplot(fig_x, use_container_width=False)
 
         st.markdown("#### EM field snapshot (single frame, larger view)")
         idx = st.slider("Snapshot", 0, len(r["frames"]) - 1, len(r["frames"]) - 1, key="coupled_frame")
@@ -632,13 +713,16 @@ with tab_coupled:
         fig = heatmap(r["frames"][idx], grid.xd, grid.yd, "H_z(x,y)", extra=mark_wells)
         st.pyplot(fig, use_container_width=False)
 
-        st.markdown("#### Well dipole response")
-        for w in wells:
-            h = w.history
-            t_fs = np.array(h["t"]) / FS
-            fig2 = line_plot(t_fs, {f"{w.label}: <x> [nm]": np.array(h["x"]) / NM, f"{w.label}: <y> [nm]": np.array(h["y"]) / NM},
-                              "t [fs]", "position [nm]", f"{w.label} — induced dipole oscillation (backward coupling: {w.backward_coupling})")
-            st.pyplot(fig2, use_container_width=False)
+        if baseline is None:
+            st.markdown("#### Well dipole response")
+            st.caption("Tip: check the comparison option in the form above to see this side-by-side "
+                       "with a matched backward-coupling-off baseline.")
+            for w in wells:
+                h = w.history
+                t_fs = np.array(h["t"]) / FS
+                fig2 = line_plot(t_fs, {f"{w.label}: <x> [nm]": np.array(h["x"]) / NM, f"{w.label}: <y> [nm]": np.array(h["y"]) / NM},
+                                  "t [fs]", "position [nm]", f"{w.label} — induced dipole oscillation (backward coupling: {w.backward_coupling})")
+                st.pyplot(fig2, use_container_width=False)
 
         st.caption(
             "Forward coupling: the E-field sampled at each well drives its Schrödinger equation through the "
