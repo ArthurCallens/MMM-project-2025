@@ -535,12 +535,28 @@ with tab_coupled:
         pml_nm = c3.number_input("PML thickness [nm]", value=10 * dx_nm, min_value=2 * dx_nm)
         courant = c4.slider("Courant number", 0.5, 0.99, 0.9, key="c_courant")
 
-        st.markdown("**Incident plane wave**")
-        c1, c2, c3, c4 = st.columns(4)
-        amplitude = c1.number_input("Amplitude E0 [V/m]", value=2e8)
-        sigma_fs = c2.number_input("Pulse width sigma [fs]", value=0.25, min_value=0.02)
-        theta_deg = c3.number_input("Incidence angle [deg]", value=0.0)
-        tc_mult = c4.slider("t_c/sigma", 5.0, 10.0, 6.0, key="c_tc")
+        st.markdown(
+            "**Incident plane wave** &nbsp; _(tip: the backward-coupled/re-radiated field scales "
+            "*linearly* with the particle density N below, and is much larger under **resonant** "
+            "driving — a monochromatic wave tuned near a well's f_HO builds up a large oscillation "
+            "amplitude, instead of the tiny fraction of a broadband pulse's energy that overlaps "
+            "the resonance)_"
+        )
+        c1, c2 = st.columns(2)
+        src_kind = c1.selectbox("Temporal profile", ["Gaussian pulse (broadband)", "Ramped monochromatic sine (resonant driving)"])
+        theta_deg = c2.number_input("Incidence angle [deg]", value=0.0)
+        if src_kind.startswith("Gaussian"):
+            c1, c2, c3 = st.columns(3)
+            amplitude = c1.number_input("Amplitude E0 [V/m]", value=2e8)
+            sigma_fs = c2.number_input("Pulse width sigma [fs]", value=0.25, min_value=0.02)
+            tc_mult = c3.slider("t_c/sigma", 5.0, 10.0, 6.0, key="c_tc")
+            fc_thz = ramp_cycles = None
+        else:
+            c1, c2, c3 = st.columns(3)
+            amplitude = c1.number_input("Amplitude E0 [V/m]", value=2e8)
+            fc_thz = c2.number_input("Drive frequency f_c [THz] (set = a well's f_HO below for resonance)", value=795.8)
+            ramp_cycles = c3.number_input("Ramp-on duration [cycles]", value=5.0, min_value=1.0)
+            sigma_fs = tc_mult = None
 
         st.markdown("**Well(s)**")
         n_wells = st.number_input("Number of wells", 1, 3, 1)
@@ -555,7 +571,13 @@ with tab_coupled:
                 c5, c6, c7, c8 = st.columns(4)
                 m_eff_frac = c5.number_input("m* [m_e]", value=0.15, key=f"w_m_{i}")
                 f_ho_thz = c6.number_input("f_HO [THz]", value=795.8, key=f"w_f_{i}")
-                N_line = c7.number_input("Particle density N [1e7 /m]", value=1.0, key=f"w_N_{i}")
+                N_line = c7.number_input(
+                    "Particle density N [1e7 /m]", value=1.0, min_value=0.0, key=f"w_N_{i}",
+                    help="Backward coupling scales ~linearly with N. Measured with resonant driving: "
+                         "N=1 (assignment's suggested value) -> backward field ~0.0006% of the total; "
+                         "N=100 -> ~0.07% (clearly visible on the difference plot); "
+                         "N=10000 -> backward coupling dominates the total field outright.",
+                )
                 backward = c8.checkbox("Backward coupling", value=True, key=f"w_bw_{i}")
                 well_cfgs.append(dict(x=wx, y=wy, L=wL, dx=wdx, m_eff=m_eff_frac, f_ho=f_ho_thz, N=N_line * 1e7, backward=backward))
 
@@ -576,7 +598,10 @@ with tab_coupled:
         pml = PMLParams(thickness=pml_nm * NM)
         fdtd = FDTD2D(grid, dt, mats, pml_x=pml, pml_y=pml)
 
-        profile = GaussianPulse(amplitude=amplitude, sigma=sigma_fs * FS, tc=tc_mult * sigma_fs * FS)
+        if src_kind.startswith("Gaussian"):
+            profile = GaussianPulse(amplitude=amplitude, sigma=sigma_fs * FS, tc=tc_mult * sigma_fs * FS)
+        else:
+            profile = RampedSine(amplitude=amplitude, omega_c=2 * np.pi * fc_thz * 1e12, ramp_cycles=ramp_cycles)
         wave = PlaneWave(profile, theta_deg=theta_deg, E0=1.0)
         margin = max(int(pml_nm / dx_nm) + 4, 10)
         fdtd.add_tfsf(wave, margin, grid.Nx - margin, margin, grid.Ny - margin)
