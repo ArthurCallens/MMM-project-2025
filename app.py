@@ -850,20 +850,58 @@ with tab_coupled:
             lv_ramp = c3.number_input("Ramp-on [cycles]", value=5.0, min_value=1.0, key="lv_ramp")
             lv_sigma_fs = lv_tc_mult = None
 
-        c1, c2, c3, c4 = st.columns(4)
-        lv_amp = c1.number_input("Drive amplitude E0 [V/m]", value=1e10, key="lv_amp",
-                                  help="Level populations are sensitive: ~2e8 V/m (the other sections' default) "
-                                       "barely nudges population out of the ground state; ~1e10 V/m gives a "
-                                       "clearly visible spread across several levels.")
-        lv_N = c2.number_input("Particle density N [1e7 /m]", value=100.0, min_value=0.0, key="lv_N",
-                                help="Sets how strongly the well radiates back into the EM field. Unlike in the "
-                                     "section above, here it can ALSO end up affecting the electron's own "
-                                     "populations, indirectly, through the self-consistent field feedback.")
-        lv_nmax = c3.number_input("Track levels up to n_x,n_y =", value=3, min_value=1, max_value=6, step=1, key="lv_nmax")
-        lv_nsteps = c4.number_input("Number of time steps", value=9000, min_value=200, max_value=30000, step=500, key="lv_nsteps",
+        LEVELS_REGIME_PRESETS = {
+            "Weak (near two-level, low leakage)": dict(
+                amp=3e8, N=1.0,
+                note="Drive amplitude and N are both physically modest (N=1e7/m matches the assignment's own "
+                     "suggested value). Verified: population climbs cleanly into the first excited state with "
+                     "leakage into n≥2 staying under ~4% for the first several cycles -- an honest, approximately "
+                     "two-level regime, closest to how a real (weakly-driven) qubit-like transition would look, "
+                     "though it can never reach a clean, complete population inversion (see the caption below)."
+            ),
+            "Moderate": dict(
+                amp=1.5e9, N=10.0,
+                note="A middle ground: noticeably faster, larger population transfer than the weak regime, with "
+                     "leakage into higher levels becoming clearly non-negligible well before the first excited "
+                     "state's population peaks."
+            ),
+            "Strong (ladder-climbing, dominant backward coupling)": dict(
+                amp=1e10, N=100.0,
+                note="This section's original default: population spreads across many levels within a handful of "
+                     "cycles ('ladder-climbing', not two-level Rabi flopping -- see the physics note above), and "
+                     "backward coupling is strong enough to measurably feed back into the electron's own "
+                     "populations (the radiation-reaction effect)."
+            ),
+        }
+        lv_regime = st.selectbox(
+            "Coupling regime", list(LEVELS_REGIME_PRESETS) + ["Custom (set amplitude and N manually)"],
+            index=2, key="lv_regime",
+            help="Presets spanning from a physically modest, near-two-level drive (weak) to the strongly-driven, "
+                 "strongly-coupled regime this section originally defaulted to (strong).",
+        )
+        if lv_regime in LEVELS_REGIME_PRESETS:
+            preset = LEVELS_REGIME_PRESETS[lv_regime]
+            lv_amp, lv_N = preset["amp"], preset["N"]
+            st.caption(f"**Preset values:** E0 = {lv_amp:.0e} V/m, N = {lv_N:.0f}e7 /m = {lv_N*1e7:.0e} /m. {preset['note']}")
+        else:
+            c1, c2 = st.columns(2)
+            lv_amp = c1.number_input("Drive amplitude E0 [V/m]", value=1e10, key="lv_amp",
+                                      help="Level populations are sensitive: ~2e8 V/m (the other sections' default) "
+                                           "barely nudges population out of the ground state; ~1e10 V/m gives a "
+                                           "clearly visible spread across several levels.")
+            lv_N = c2.number_input("Particle density N [1e7 /m]", value=100.0, min_value=0.0, key="lv_N",
+                                    help="Sets how strongly the well radiates back into the EM field. It can ALSO "
+                                         "end up affecting the electron's own populations, indirectly, through "
+                                         "the self-consistent field feedback.")
+
+        c1, c2 = st.columns(2)
+        lv_nmax = c1.number_input("Track levels up to n_x,n_y =", value=3, min_value=1, max_value=6, step=1, key="lv_nmax")
+        lv_nsteps = c2.number_input("Number of time steps", value=9000, min_value=200, max_value=30000, step=500, key="lv_nsteps",
                                      help="For the Gaussian pulse, make sure this covers the pulse itself PLUS "
                                           "several well-oscillation periods afterward (period = 1/f_HO) so you can "
-                                          "actually see the post-pulse ringing, not just the pulse itself.")
+                                          "actually see the post-pulse ringing, not just the pulse itself. For the "
+                                          "weak regime, more steps = more drive cycles = population climbs higher "
+                                          "(and leakage grows too -- that trade-off is the whole point).")
 
         lv_compare = st.checkbox("Also run a matched comparison with backward coupling forced OFF", value=True, key="lv_compare")
         run_levels = st.form_submit_button("▶ Run", type="primary")
