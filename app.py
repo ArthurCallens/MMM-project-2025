@@ -255,7 +255,7 @@ with tab_em:
         fdtd.add_tfsf(wave, margin, grid.Nx - margin, margin, grid.Ny - margin)
         obs = fdtd.add_observer(obs_x * NM, obs_y * NM, "observer")
 
-        n_frames = 40
+        n_frames = 110
         frame_every = max(1, int(nsteps) // n_frames)
         frames = []
         prog = st.progress(0.0, text="Running FDTD…")
@@ -440,7 +440,7 @@ with tab_qm:
             profile = None
 
         pol = np.deg2rad(pol_deg)
-        n_frames = 40
+        n_frames = 110
         frame_every = max(1, nsteps // n_frames)
         frames, ts, xs, ys, pxs, pys, Ts, norms, cont_res = [], [], [], [], [], [], [], [], []
         prog = st.progress(0.0, text="Running QM solver…")
@@ -634,7 +634,7 @@ with tab_coupled:
         monitor = fdtd.add_observer(mon_x, mon_y, "downstream monitor")
 
         coupled = CoupledSimulation(fdtd, wells)
-        n_frames = 40
+        n_frames = 110
         frame_every = max(1, int(nsteps) // n_frames)
         frames = []
         qm_frames = [[] for _ in wells]  # per-well |Psi|^2 snapshots, independent of the EM field's scale

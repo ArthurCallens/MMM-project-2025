@@ -47,14 +47,14 @@ def _propagation_and_pml_demo():
     energies = []
     frames = []
     nsteps = 900
-    frame_every = max(1, nsteps // 45)
+    frame_every = max(1, nsteps // 100)
     for n in range(nsteps):
         sim.step()
         if n % 10 == 0:
             energies.append((sim.t, np.sum(sim.Ex ** 2) + np.sum(sim.Ey ** 2) + np.sum(sim.Hz ** 2)))
         if n % frame_every == 0:
             frames.append(sim.Hz.copy())
-    anim = _safe_video(frames, grid.xd, grid.yd, "H_z(x,y) — plane wave crossing + PML absorption", fps=10)
+    anim = _safe_video(frames, grid.xd, grid.yd, "H_z(x,y) — plane wave crossing + PML absorption", fps=16)
     t_arr = np.array(obs.t)
     ey = np.array(obs.Ey)
     peak_t = t_arr[np.argmax(np.abs(ey))]
@@ -85,7 +85,7 @@ def _pmc_validation_demo():
     obs = sim.add_observer(xo, yo)
     nsteps = 5000
     frames = []
-    frame_every = max(1, nsteps // 45)
+    frame_every = max(1, nsteps // 100)
     for n in range(nsteps):
         sim.step()
         if n % frame_every == 0:
@@ -94,7 +94,7 @@ def _pmc_validation_demo():
     def _mark_cyl(ax, _cx=cx, _cy=cy, _a=a):
         ax.add_patch(plt.Circle((_cx / NM, _cy / NM), _a / NM, fill=False, color="k", lw=1.2))
 
-    anim = _safe_video(frames, grid.xd, grid.yd, "H_z(x,y) — scattering off a PMC cylinder", fps=10, mark_fn=_mark_cyl)
+    anim = _safe_video(frames, grid.xd, grid.yd, "H_z(x,y) — scattering off a PMC cylinder", fps=16, mark_fn=_mark_cyl)
     omega_max = pulse.omega_max(3.0)
     omega, spec = fft_frequency_response(np.array(obs.t), np.array(obs.Hz), band=(0.2 * omega_max, 0.75 * omega_max))
     pos = omega > 0
@@ -118,7 +118,7 @@ def _qm_demo():
     dt = T / 300
     ts, xs, norms = [], [], []
     frames = []
-    frame_every = max(1, 600 // 45)
+    frame_every = max(1, 600 // 100)
     for n in range(600):
         qm2.step(dt)
         ex, _ = qm2.expectation_xy()
@@ -127,7 +127,7 @@ def _qm_demo():
             frames.append(np.abs(qm2.psi) ** 2)
     ts, xs, norms = np.array(ts), np.array(xs), np.array(norms)
     anim = _safe_video(frames, qm2.x, qm2.y, "|Ψ(x,y)|² — displaced coherent state in the HO well",
-                        cmap="viridis", symmetric=False, fps=10)
+                        cmap="viridis", symmetric=False, fps=16)
 
     # tiny resolution-convergence study (2 resolutions, short duration, for speed)
     conv = []

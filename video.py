@@ -93,8 +93,8 @@ def _encode_mp4(rgb_frames: list[np.ndarray], fps: int) -> bytes | None:
 
 
 def field_frames_to_gif(frames, xs, ys, title, cmap="RdBu_r", symmetric=True, unit="nm",
-                         fps=8, mark_fn=None, dpi=80, figsize=(4.4, 3.7),
-                         hold_last=2, also_mp4=True) -> dict:
+                         fps=18, mark_fn=None, dpi=80, figsize=(4.4, 3.7),
+                         hold_last=None, also_mp4=True) -> dict:
     """Render a list of 2-D field snapshots into a playable animation.
 
     Returns a dict with `gif` (bytes, always present) and `mp4` (bytes or None,
@@ -127,6 +127,8 @@ def field_frames_to_gif(frames, xs, ys, title, cmap="RdBu_r", symmetric=True, un
         im.set_data(frames[i].T)
         title_artist.set_text(f"{title}  (frame {i + 1}/{len(frames)})")
 
+    if hold_last is None:
+        hold_last = max(1, fps // 2)
     try:
         rgb_frames = _render_rgb_frames(update, len(frames), fig, hold_last=max(1, hold_last))
     finally:
@@ -137,8 +139,8 @@ def field_frames_to_gif(frames, xs, ys, title, cmap="RdBu_r", symmetric=True, un
     return dict(gif=gif_bytes, mp4=mp4_bytes)
 
 
-def line_series_to_gif(t, series: dict, xlabel, ylabel, title, fps=12, dpi=80,
-                        figsize=(5.6, 3.3), also_mp4=True) -> dict:
+def line_series_to_gif(t, series: dict, xlabel, ylabel, title, fps=18, dpi=80,
+                        figsize=(5.6, 3.3), also_mp4=True, n_frames=110) -> dict:
     """Render a growing line plot (e.g. an expectation value catching up to the current
     time) as a playable animation. Returns the same `{gif, mp4}` dict as
     `field_frames_to_gif`."""
@@ -146,7 +148,7 @@ def line_series_to_gif(t, series: dict, xlabel, ylabel, title, fps=12, dpi=80,
     n = len(t)
     if n == 0:
         raise ValueError("no data to render")
-    n_frames = min(n, 60)
+    n_frames = min(n, n_frames)
     idxs = np.linspace(1, n, n_frames).astype(int)
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
