@@ -207,7 +207,7 @@ elementwise-array operations — no explicit loop over grid points anywhere in t
 METHOD_QM = """
 ## 3. Part 2 — QM methodology
 
-The electron's 2-D wavefunction obeys `i*hbar dPsi/dt = [-hbar^2/2m* nabla^2 + V0(x,y) +
+The electron's 2-D wavefunction obeys `i*hbar dPsi/dt = [-hbar^2/2m* nabla^2 + V0(x,y) -
 q E(t).r] Psi`, with `V0` a static harmonic-oscillator well and the interaction term the
 length-gauge dipole approximation (uniform field over the — deliberately small — well).
 Because both `V0` and the interaction are **separable**, `V(x,y,t) = Vx(x,t) + Vy(y,t)`,
@@ -234,9 +234,7 @@ quantum current density (assignment eq. 1, with the particle-line-density factor
 which already carries the correct [A/m^2] units to enter directly as a source current in
 the Ampère–Maxwell update; it is deposited onto the EM grid as a local, area-weighted
 average over each overlapping EM cell (so the scheme is agnostic to whether the EM grid
-is finer or coarser than the QM grid near the well). Multiple wells are supported, each
-with its own Schrödinger solver instance and location, coupled to each other only
-*radiatively*, through the shared EM field.
+is finer or coarser than the QM grid near the well).
 """
 
 
@@ -395,8 +393,7 @@ def render_report(st):
 - **Extra features implemented beyond the minimal requirements:** oblique-incidence TFSF
   via analytic injection; periodic (in addition to PEC) outer boundaries; Numba-JIT
   acceleration of the Drude ADE update; non-dispersive-dielectric and dielectric-cylinder
-  (Mie-series) validation in addition to the required PMC case; multiple, independently
-  driven, radiatively-coupled quantum wells sharing one EM field.
+  (Mie-series) validation in addition to the required PMC case.
 """
     )
 

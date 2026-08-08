@@ -85,30 +85,3 @@ def test_qm_ehrenfest_oscillation():
     err = np.max(np.abs(xs - x0 * np.cos(omega * ts))) / x0
     assert err < 0.05
     assert abs(qm.norm() - 1.0) < 1e-10
-
-
-def test_energy_level_populations():
-    omega = 50e14
-    qm = Schrodinger2D(Lx=8 * NM, Ly=8 * NM, dx=0.05 * NM, m_eff=0.15 * ME, omega_ho=omega, boundary_radius=3.5 * NM)
-
-    # eigenbasis orthonormality
-    Ax, _ = qm.eigenbasis(5)
-    gram = Ax @ Ax.T * qm.dx
-    assert np.allclose(gram, np.eye(6), atol=1e-3)
-
-    # ground state -> 100% in level (0,0)
-    qm.set_state(qm.ground_state())
-    pop = qm.level_populations(nmax=4)
-    assert pop[0, 0] > 0.9999
-    assert abs(pop.sum() - 1.0) < 1e-6
-
-    # displaced coherent state -> Poisson-distributed population along n_x, mean = alpha^2
-    x0 = 0.6 * NM
-    qm.set_state(qm.coherent_state(x0=x0))
-    pop = qm.level_populations(nmax=6)
-    a = qm.m_eff * qm.omega_ho / HBAR
-    sigma_x = 1.0 / np.sqrt(a)
-    alpha_sq = (x0 / (np.sqrt(2) * sigma_x)) ** 2
-    mean_n = float(np.sum(pop.sum(axis=1) * np.arange(pop.shape[0])))
-    assert abs(mean_n - alpha_sq) / alpha_sq < 0.05
-    assert pop[:, 1:].max() < 1e-6  # undisplaced in y -> no y-excitation

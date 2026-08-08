@@ -1,6 +1,6 @@
 """2-D time-dependent Schrodinger solver for a single electron in a (harmonic-oscillator)
 well, driven by a spatially-uniform electric field via the length-gauge dipole
-interaction Hamiltonian H_int(t) = q [Ex(t) x + Ey(t) y] (project Part 2, Sec. 3).
+interaction Hamiltonian H_int(t) = -q [Ex(t) x + Ey(t) y] (project Part 2, Sec. 3).
 
 Because the harmonic-oscillator potential and the length-gauge interaction are both
 separable, V(x,y,t) = Vx(x,t) + Vy(y,t), the x- and y- pieces of the Hamiltonian commute
@@ -14,23 +14,12 @@ precision regardless of the time step.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.linalg import solve_banded
-from scipy.special import eval_hermite
 
 from .constants import HBAR, ME, QE
-
-
-def ho_eigenfunction_1d(n: int, x: np.ndarray, m_eff: float, omega: float) -> np.ndarray:
-    """The n-th eigenstate of the 1-D harmonic oscillator (real, normalised Hermite
-    function), sampled at points `x`. E_n = hbar*omega*(n + 1/2)."""
-    a = m_eff * omega / HBAR
-    xi = np.sqrt(a) * np.asarray(x)
-    norm = (a / np.pi) ** 0.25 / np.sqrt(2.0 ** n * math.factorial(n))
-    return norm * eval_hermite(n, xi) * np.exp(-xi ** 2 / 2.0)
 
 
 @dataclass
@@ -176,39 +165,6 @@ class Schrodinger2D:
         jx, jy = self.probability_current()
         scale = self.charge * N
         return scale * jx, scale * jy
-
-    # ------------------------------------------------- energy levels / orbitals
-
-    def eigenbasis(self, nmax: int):
-        """1-D harmonic-oscillator eigenfunctions n=0..nmax on this solver's own x and y
-        grids, cached (they only depend on m_eff/omega_ho/grid, all fixed after init).
-        Returns (Ax, Ay), each shape (nmax+1, N)."""
-        if getattr(self, "_eig_nmax", None) != nmax:
-            self._eig_ax = np.array([ho_eigenfunction_1d(n, self.x, self.m_eff, self.omega_ho) for n in range(nmax + 1)])
-            self._eig_ay = np.array([ho_eigenfunction_1d(n, self.y, self.m_eff, self.omega_ho) for n in range(nmax + 1)])
-            self._eig_nmax = nmax
-        return self._eig_ax, self._eig_ay
-
-    def level_amplitudes(self, nmax: int = 3) -> np.ndarray:
-        """Complex overlap coefficients c_{nx,ny} = <nx,ny|Psi> for nx,ny = 0..nmax,
-        computed in one shot via separability of the (nx,ny) basis: shape (nmax+1, nmax+1)."""
-        Ax, Ay = self.eigenbasis(nmax)
-        return (Ax @ self.psi @ Ay.T) * self.dx * self.dy
-
-    def level_populations(self, nmax: int = 3) -> np.ndarray:
-        """|c_{nx,ny}|^2 for nx,ny = 0..nmax -- how much of Psi currently sits in each
-        harmonic-oscillator orbital. Sums to <=1 (the remainder has leaked to levels
-        above nmax, or been absorbed at the Dirichlet boundary)."""
-        return np.abs(self.level_amplitudes(nmax)) ** 2
-
-    def eigenfunction_2d(self, nx: int, ny: int) -> np.ndarray:
-        """The real-space shape of orbital (nx, ny), |psi_nx(x)*psi_ny(y)|, on this
-        solver's grid -- for plotting a reference gallery of the orbitals themselves."""
-        Ax, Ay = self.eigenbasis(max(nx, ny))
-        return np.outer(Ax[nx], Ay[ny])
-
-    def level_energy(self, nx: int, ny: int) -> float:
-        return HBAR * self.omega_ho * (nx + ny + 1)
 
     def continuity_residual(self, dt: float):
         """||d|psi|^2/dt + div(j_prob)||, evaluated with the *previous* step's data

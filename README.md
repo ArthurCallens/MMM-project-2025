@@ -24,7 +24,7 @@ tabs:
   state or a displaced coherent state), and an optional driving field, then run and
   inspect the probability density, expectation values, norm conservation, and the
   continuity-equation residual.
-- **Part 3 — Coupled EM/QM:** place one or more wells inside an EM domain illuminated by a
+- **Part 3 — Coupled EM/QM:** place a well inside an EM domain illuminated by a
   plane wave, with forward (E-field → Hamiltonian) and backward (quantum current →
   Ampère's-law source) coupling, and watch the induced dipole oscillation / re-radiation.
 - **Report:** a self-contained, reproducible write-up (methodology, validation results,
@@ -43,7 +43,7 @@ emqm/
   fdtd_te.py       the 2-D TE FDTD time-stepping engine
   numba_kernels.py optional Numba-JIT-accelerated Drude ADE update
   quantum.py       2-D time-dependent Schrödinger solver (ADI Crank–Nicolson)
-  coupling.py      forward/backward EM<->QM coupling, multi-well support
+  coupling.py      forward/backward EM<->QM coupling
   validation.py    analytic reference solutions (plane wave, PMC/dielectric cylinder)
 app.py             Streamlit front-end
 report_content.py  report text + figures, used by the app's "Report" tab
@@ -81,5 +81,4 @@ the app) for large grids / long runs.
 - Periodic (in addition to PEC) outer boundary condition.
 - Non-dispersive dielectric and dielectric-cylinder (Mie-series) validation, in addition
   to the required PMC-cylinder case.
-- Multiple, independently driven, radiatively-coupled quantum wells sharing one EM field.
 - Optional Numba-JIT acceleration.

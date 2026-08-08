@@ -6,8 +6,7 @@ Part 1 - nonuniform 2-D TE Yee-FDTD (CPML/UPML, TFSF plane-wave injection, Drude
 Part 2 - 2-D time-dependent Schrodinger solver (ADI Crank-Nicolson) for an electron in a
          harmonic-oscillator well, with Ehrenfest/continuity validation.
 Part 3 - the two solvers coupled (forward: E-field -> length-gauge Hamiltonian; backward:
-         quantum current density -> EM source), supporting multiple radiatively-coupled
-         wells.
+         quantum current density -> EM source).
 
 Run with:  streamlit run app.py
 """
@@ -22,7 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 
-from emqm.constants import C0, ETA0, FS, HBAR, ME, NM, QE
+from emqm.constants import ETA0, FS, ME, NM
 from emqm.coupling import CoupledSimulation, Well
 from emqm.fdtd_te import FDTD2D
 from emqm.grid import Grid2D, nonuniform_axis, uniform_axis
@@ -173,8 +172,7 @@ Wells* project:
   interaction Hamiltonian.
 - **Part 3 (coupling):** the two are coupled bidirectionally — forward via the E-field
   sampled at the well, backward via the quantum current density injected as a source
-  current in Ampère's law — and multiple wells can be placed and interact only through
-  the shared, self-consistently-computed EM field.
+  current in Ampère's law.
 
 **How to use this app:** each tab below is a self-contained "dialog" — set the physical
 and numerical parameters in the form, click **Run**, and inspect the field snapshots,
@@ -197,7 +195,7 @@ compiled path, selectable in the Part-1 form.
         st.latex(r"\nabla_t \times h_z\mathbf{u}_z = \varepsilon \frac{\partial}{\partial t} \mathbf{e}_t + \mathbf{J}")
     with c2:
         st.subheader("Governing equation (Part 2)")
-        st.latex(r"i\hbar \frac{\partial \Psi}{\partial t} = \left[-\frac{\hbar^2}{2m^*}\nabla^2 + \frac{1}{2}m^*\omega_{HO}^2 r^2 + q\,\mathbf{E}(t)\cdot\mathbf{r}\right]\Psi")
+        st.latex(r"i\hbar \frac{\partial \Psi}{\partial t} = \left[-\frac{\hbar^2}{2m^*}\nabla^2 + \frac{1}{2}m^*\omega_{HO}^2 r^2 - q\,\mathbf{E}(t)\cdot\mathbf{r}\right]\Psi")
 
 # ============================================================================ Part 1: EM
 with tab_em:
@@ -532,8 +530,8 @@ with tab_qm:
 with tab_coupled:
     st.markdown("### Part 3 — Coupled 2-D EM/QM solver")
     st.caption(
-        "One or more harmonic-oscillator wells (electrons), embedded in the EM domain, driven by the local "
-        "E-field (forward coupling) and — optionally — radiating back into the EM grid through their quantum "
+        "A harmonic-oscillator well (electron), embedded in the EM domain, driven by the local "
+        "E-field (forward coupling) and — optionally — radiating back into the EM grid through its quantum "
         "current density (backward coupling, eq. 1 of the Part-2 assignment)."
     )
     with st.form("coupled_form"):
@@ -547,7 +545,7 @@ with tab_coupled:
         st.markdown(
             "**Incident plane wave** &nbsp; _(tip: the backward-coupled/re-radiated field scales "
             "*linearly* with the particle density N below, and is much larger under **resonant** "
-            "driving — a monochromatic wave tuned near a well's f_HO builds up a large oscillation "
+            "driving — a monochromatic wave tuned near the well's f_HO builds up a large oscillation "
             "amplitude, instead of the tiny fraction of a broadband pulse's energy that overlaps "
             "the resonance)_"
         )
@@ -563,32 +561,27 @@ with tab_coupled:
         else:
             c1, c2, c3 = st.columns(3)
             amplitude = c1.number_input("Amplitude E0 [V/m]", value=2e8)
-            fc_thz = c2.number_input("Drive frequency f_c [THz] (set = a well's f_HO below for resonance)", value=795.8)
+            fc_thz = c2.number_input("Drive frequency f_c [THz] (set = the well's f_HO below for resonance)", value=795.8)
             ramp_cycles = c3.number_input("Ramp-on duration [cycles]", value=5.0, min_value=1.0)
             sigma_fs = tc_mult = None
 
-        st.markdown("**Well(s)**")
-        n_wells = st.number_input("Number of wells", 1, 3, 1)
-        well_cfgs = []
-        for i in range(int(n_wells)):
-            with st.expander(f"Well {i + 1}", expanded=True):
-                c1, c2, c3, c4 = st.columns(4)
-                wx = c1.number_input("x [nm]", value=Lx_nm / 2 + i * 15.0, key=f"w_x_{i}")
-                wy = c2.number_input("y [nm]", value=Lx_nm / 2, key=f"w_y_{i}")
-                wL = c3.number_input("Well size [nm]", value=5.0, key=f"w_L_{i}")
-                wdx = c4.number_input("Well dx [pm]", value=50.0, key=f"w_dx_{i}")
-                c5, c6, c7, c8 = st.columns(4)
-                m_eff_frac = c5.number_input("m* [m_e]", value=0.15, key=f"w_m_{i}")
-                f_ho_thz = c6.number_input("f_HO [THz]", value=795.8, key=f"w_f_{i}")
-                N_line = c7.number_input(
-                    "Particle density N [1e7 /m]", value=1.0, min_value=0.0, key=f"w_N_{i}",
-                    help="Backward coupling scales ~linearly with N. Measured with resonant driving: "
-                         "N=1 (assignment's suggested value) -> backward field ~0.0006% of the total; "
-                         "N=100 -> ~0.07% (clearly visible on the difference plot); "
-                         "N=10000 -> backward coupling dominates the total field outright.",
-                )
-                backward = c8.checkbox("Backward coupling", value=True, key=f"w_bw_{i}")
-                well_cfgs.append(dict(x=wx, y=wy, L=wL, dx=wdx, m_eff=m_eff_frac, f_ho=f_ho_thz, N=N_line * 1e7, backward=backward))
+        st.markdown("**Well**")
+        c1, c2, c3, c4 = st.columns(4)
+        wx = c1.number_input("x [nm]", value=Lx_nm / 2)
+        wy = c2.number_input("y [nm]", value=Lx_nm / 2)
+        wL = c3.number_input("Well size [nm]", value=5.0)
+        wdx = c4.number_input("Well dx [pm]", value=50.0)
+        c5, c6, c7, c8 = st.columns(4)
+        m_eff_frac = c5.number_input("m* [m_e]", value=0.15)
+        f_ho_thz = c6.number_input("f_HO [THz]", value=795.8)
+        N_line = c7.number_input(
+            "Particle density N [1e7 /m]", value=1.0, min_value=0.0,
+            help="Backward coupling scales ~linearly with N. Measured with resonant driving: "
+                 "N=1 (assignment's suggested value) -> backward field ~0.0006% of the total; "
+                 "N=100 -> ~0.07% (clearly visible on the difference plot); "
+                 "N=10000 -> backward coupling dominates the total field outright.",
+        )
+        backward_default = c8.checkbox("Backward coupling", value=True)
 
         nsteps = st.number_input("Number of time steps", value=1200, min_value=100, max_value=20000, step=100)
         do_compare = st.checkbox(
@@ -615,22 +608,19 @@ with tab_coupled:
         margin = max(int(pml_nm / dx_nm) + 4, 10)
         fdtd.add_tfsf(wave, margin, grid.Nx - margin, margin, grid.Ny - margin)
 
-        wells = []
-        for i, cfg in enumerate(well_cfgs):
-            omega_ho = 2 * np.pi * cfg["f_ho"] * 1e12
-            qmi = Schrodinger2D(Lx=cfg["L"] * NM, Ly=cfg["L"] * NM, dx=cfg["dx"] * 1e-12,
-                                 m_eff=cfg["m_eff"] * ME, omega_ho=omega_ho)
-            qmi.set_state(qmi.ground_state())
-            backward = False if force_backward_off else cfg["backward"]
-            wells.append(Well(qm=qmi, x0=cfg["x"] * NM, y0=cfg["y"] * NM, N=cfg["N"],
-                               backward_coupling=backward, label=f"well {i + 1}"))
+        omega_ho = 2 * np.pi * f_ho_thz * 1e12
+        qmi = Schrodinger2D(Lx=wL * NM, Ly=wL * NM, dx=wdx * 1e-12, m_eff=m_eff_frac * ME, omega_ho=omega_ho)
+        qmi.set_state(qmi.ground_state())
+        backward = False if force_backward_off else backward_default
+        wells = [Well(qm=qmi, x0=wx * NM, y0=wy * NM, N=N_line * 1e7,
+                       backward_coupling=backward, label="well")]
 
-        # a downstream monitor point just past the first well, along the propagation
+        # a downstream monitor point just past the well, along the propagation
         # direction -- this is where a re-radiated wavelet from backward coupling shows
         # up most clearly, since it sees the well's dipole field directly
         theta = np.deg2rad(theta_deg)
-        mon_x = well_cfgs[0]["x"] * NM + 8 * NM * np.cos(theta)
-        mon_y = well_cfgs[0]["y"] * NM + 8 * NM * np.sin(theta)
+        mon_x = wx * NM + 8 * NM * np.cos(theta)
+        mon_y = wy * NM + 8 * NM * np.sin(theta)
         monitor = fdtd.add_observer(mon_x, mon_y, "downstream monitor")
 
         coupled = CoupledSimulation(fdtd, wells)
@@ -807,323 +797,6 @@ with tab_coupled:
             "the well radiates back into the EM field (visible as a weak secondary wavelet in the H_z snapshot "
             "once the well is driven); with it disabled, only the incident field reaches the well."
         )
-
-    # ------------------------------------------------------------ Energy levels / orbitals
-    st.markdown("---")
-    st.markdown("### 🔬 Fully backward-coupled scene: energy levels / orbitals")
-    st.caption(
-        "A single well, decomposed onto the harmonic-oscillator energy eigenstates "
-        "|n_x, n_y⟩ (E = ħω_HO(n_x+n_y+1)) at every recorded instant, run *with and without* "
-        "backward coupling so you can see both things it changes: (1) the EM field (the "
-        "well radiating into the grid, as in the section above) and (2) — more subtly — "
-        "**the electron's own dynamics**, because backward coupling modifies the very field "
-        "that drives the well, via its own radiation. That self-consistent feedback is the "
-        "quantum analogue of radiation reaction, and it's real, but it's also strongly "
-        "N-dependent: at the *Moderate* preset (N=1e8/m) it's a small effect (well under 1% "
-        "total population redistribution); at the *Strong* preset (N=1e9/m) it becomes large "
-        "(~40% total population redistribution, verified below) — this section deliberately "
-        "spans that range so you can see the effect grow with coupling strength, rather than "
-        "defaulting to a single number."
-    )
-    with st.form("levels_form"):
-        c1, c2, c3, c4 = st.columns(4)
-        lv_Lx_nm = c1.number_input("Domain Lx=Ly [nm]", value=50.0, min_value=15.0, key="lv_Lx")
-        lv_dx_nm = c2.number_input("EM grid step [nm]", value=0.5, min_value=0.05, key="lv_dx")
-        lv_wL = c3.number_input("Well size [nm]", value=5.0, key="lv_wL")
-        lv_wdx = c4.number_input("Well dx [pm]", value=50.0, key="lv_wdx")
-
-        c1, c2 = st.columns(2)
-        lv_m_eff = c1.number_input("m* [m_e]", value=0.15, key="lv_m")
-        lv_f_ho = c2.number_input("f_HO [THz]  (= the resonant frequency, see below)", value=795.8, key="lv_fho")
-
-        lv_src_kind = st.selectbox(
-            "Incident wave", ["Gaussian pulse (finite — see what happens after it passes)", "Ramped monochromatic sine (continuous)"],
-            key="lv_src_kind",
-        )
-        if lv_src_kind.startswith("Gaussian"):
-            c1, c2, c3 = st.columns(3)
-            lv_sigma_fs = c1.number_input("Pulse width sigma [fs]", value=0.4, min_value=0.02, key="lv_sigma",
-                                           help="~0.4 fs gives a broadband pulse whose spectrum comfortably covers "
-                                                "f_HO=795.8 THz (period 1.26 fs), so it excites the well efficiently "
-                                                "despite not being a monochromatic/resonant source.")
-            lv_tc_mult = c3.slider("t_c / sigma", 5.0, 10.0, 6.0, key="lv_tc_mult")
-            lv_fc = lv_ramp = None
-        else:
-            c1, c2, c3 = st.columns(3)
-            lv_fc = c1.number_input("Drive frequency [THz] (=f_HO for resonance)", value=795.8, key="lv_fc")
-            lv_ramp = c3.number_input("Ramp-on [cycles]", value=5.0, min_value=1.0, key="lv_ramp")
-            lv_sigma_fs = lv_tc_mult = None
-
-        LEVELS_REGIME_PRESETS = {
-            "Weak (near two-level, low leakage)": dict(
-                amp=3e8, N=1.0,
-                note="Drive amplitude and N are both physically modest (N=1e7/m matches the assignment's own "
-                     "suggested value). Verified: population climbs cleanly into the first excited state with "
-                     "leakage into n≥2 staying under ~4% for the first several cycles -- an honest, approximately "
-                     "two-level regime, closest to how a real (weakly-driven) qubit-like transition would look, "
-                     "though it can never reach a clean, complete population inversion (see the caption below)."
-            ),
-            "Moderate": dict(
-                amp=1.5e9, N=10.0,
-                note="A middle ground: noticeably faster, larger population transfer than the weak regime, with "
-                     "leakage into higher levels becoming clearly non-negligible well before the first excited "
-                     "state's population peaks."
-            ),
-            "Strong (ladder-climbing, dominant backward coupling)": dict(
-                amp=1e10, N=100.0,
-                note="This section's original default: population spreads across many levels within a handful of "
-                     "cycles ('ladder-climbing', not two-level Rabi flopping -- see the physics note above), and "
-                     "backward coupling is strong enough to measurably feed back into the electron's own "
-                     "populations (the radiation-reaction effect)."
-            ),
-        }
-        lv_regime = st.selectbox(
-            "Coupling regime", list(LEVELS_REGIME_PRESETS) + ["Custom (set amplitude and N manually)"],
-            index=2, key="lv_regime",
-            help="Presets spanning from a physically modest, near-two-level drive (weak) to the strongly-driven, "
-                 "strongly-coupled regime this section originally defaulted to (strong).",
-        )
-        if lv_regime in LEVELS_REGIME_PRESETS:
-            preset = LEVELS_REGIME_PRESETS[lv_regime]
-            lv_amp, lv_N = preset["amp"], preset["N"]
-            st.caption(f"**Preset values:** E0 = {lv_amp:.0e} V/m, N = {lv_N:.0f}e7 /m = {lv_N*1e7:.0e} /m. {preset['note']}")
-        else:
-            c1, c2 = st.columns(2)
-            lv_amp = c1.number_input("Drive amplitude E0 [V/m]", value=1e10, key="lv_amp",
-                                      help="Level populations are sensitive: ~2e8 V/m (the other sections' default) "
-                                           "barely nudges population out of the ground state; ~1e10 V/m gives a "
-                                           "clearly visible spread across several levels.")
-            lv_N = c2.number_input("Particle density N [1e7 /m]", value=100.0, min_value=0.0, key="lv_N",
-                                    help="Sets how strongly the well radiates back into the EM field. It can ALSO "
-                                         "end up affecting the electron's own populations, indirectly, through "
-                                         "the self-consistent field feedback.")
-
-        c1, c2 = st.columns(2)
-        lv_nmax = c1.number_input("Track levels up to n_x,n_y =", value=3, min_value=1, max_value=6, step=1, key="lv_nmax")
-        lv_nsteps = c2.number_input("Number of time steps", value=9000, min_value=200, max_value=30000, step=500, key="lv_nsteps",
-                                     help="For the Gaussian pulse, make sure this covers the pulse itself PLUS "
-                                          "several well-oscillation periods afterward (period = 1/f_HO) so you can "
-                                          "actually see the post-pulse ringing, not just the pulse itself. For the "
-                                          "weak regime, more steps = more drive cycles = population climbs higher "
-                                          "(and leakage grows too -- that trade-off is the whole point).")
-
-        lv_compare = st.checkbox("Also run a matched comparison with backward coupling forced OFF", value=True, key="lv_compare")
-        run_levels = st.form_submit_button("▶ Run", type="primary")
-
-    def _run_levels_once(force_backward_off: bool):
-        Lx = Ly = lv_Lx_nm * NM
-        dx = lv_dx_nm * NM
-        grid = Grid2D(uniform_axis(Lx, dx), uniform_axis(Ly, dx))
-        mats = build_material_maps(grid, [])
-        dt = grid.cfl_dt(0.9)
-        pml = PMLParams(thickness=10 * dx)
-        fdtd = FDTD2D(grid, dt, mats, pml_x=pml, pml_y=pml)
-
-        omega_ho = 2 * np.pi * lv_f_ho * 1e12
-        is_pulse = lv_src_kind.startswith("Gaussian")
-        if is_pulse:
-            sigma = lv_sigma_fs * FS
-            tc = lv_tc_mult * sigma
-            profile = GaussianPulse(amplitude=lv_amp, sigma=sigma, tc=tc)
-            pulse_end_t = tc + 3 * sigma  # where the pulse has become negligible
-        else:
-            profile = RampedSine(amplitude=lv_amp, omega_c=2 * np.pi * lv_fc * 1e12, ramp_cycles=lv_ramp)
-            pulse_end_t = None  # continuous drive -- never "ends"
-        wave = PlaneWave(profile, theta_deg=0.0, E0=1.0)
-        margin = 14  # PML is 10 cells thick here, plus a small buffer
-        fdtd.add_tfsf(wave, margin, grid.Nx - margin, margin, grid.Ny - margin)
-
-        qmi = Schrodinger2D(Lx=lv_wL * NM, Ly=lv_wL * NM, dx=lv_wdx * 1e-12, m_eff=lv_m_eff * ME, omega_ho=omega_ho)
-        qmi.set_state(qmi.ground_state())
-        backward = not force_backward_off
-        well = Well(qm=qmi, x0=Lx / 2, y0=Ly / 2, N=lv_N * 1e7, backward_coupling=backward, label="well")
-        coupled = CoupledSimulation(fdtd, [well])
-
-        nmax = int(lv_nmax)
-        n_frames = 110
-        frame_every = max(1, int(lv_nsteps) // n_frames)
-        em_frames, qm_frames, pop_frames, pop_t = [], [], [], []
-        label = "backward OFF (baseline)" if force_backward_off else "as configured"
-        prog = st.progress(0.0, text=f"Running ({label})…")
-        t0 = time.time()
-        for n in range(int(lv_nsteps)):
-            coupled.step()
-            if n % frame_every == 0:
-                em_frames.append(fdtd.Hz.copy())
-                qm_frames.append(np.abs(qmi.psi) ** 2)
-                pop_frames.append(qmi.level_populations(nmax))
-                pop_t.append(qmi.t)
-            if n % max(1, int(lv_nsteps) // 20) == 0:
-                prog.progress(min(1.0, (n + 1) / lv_nsteps), text=f"Running ({label})… step {n + 1}/{int(lv_nsteps)}")
-        prog.empty()
-        elapsed = time.time() - t0
-
-        with st.spinner(f"Encoding animations ({label})…"):
-            em_anim = safe_animate(field_frames_to_gif, em_frames, grid.xd, grid.yd, "H_z(x,y)")
-            qm_anim = safe_animate(field_frames_to_gif, qm_frames, qmi.x, qmi.y, "|Ψ(x,y)|²", cmap="viridis", symmetric=False)
-            lvl_axis = np.arange(nmax + 1) * NM
-            pop_anim = safe_animate(field_frames_to_gif, pop_frames, lvl_axis, lvl_axis,
-                                     "Level population |c(n_x,n_y)|²", cmap="viridis", symmetric=False, unit="level index")
-
-        return dict(
-            qm=qmi, nmax=nmax, elapsed=elapsed, nsteps=int(lv_nsteps), backward=backward,
-            em_anim=em_anim, qm_anim=qm_anim, pop_anim=pop_anim, is_pulse=is_pulse, pulse_end_t=pulse_end_t,
-            pop_frames=np.array(pop_frames), pop_t=np.array(pop_t),
-        )
-
-    if run_levels:
-        st.session_state["levels_result"] = _run_levels_once(force_backward_off=False)
-        st.session_state["levels_baseline"] = _run_levels_once(force_backward_off=True) if lv_compare else None
-
-    if "levels_result" in st.session_state:
-        lr = st.session_state["levels_result"]
-        lb = st.session_state.get("levels_baseline")
-        qmi, nmax = lr["qm"], lr["nmax"]
-        st.success(f"Done: {lr['nsteps']} steps, wall time {lr['elapsed']:.2f} s "
-                   f"({lr['nsteps'] / max(lr['elapsed'], 1e-9):.0f} steps/s).")
-
-        f_res = qmi.omega_ho / (2 * np.pi)
-        E_res = HBAR * qmi.omega_ho
-        lam_res = C0 / f_res
-        st.info(
-            f"**Resonant frequency: f_HO = {f_res/1e12:.2f} THz** (ω_HO = {qmi.omega_ho:.3e} rad/s, "
-            f"photon energy ħω_HO = {E_res/QE*1000:.0f} meV, vacuum wavelength λ = {lam_res*1e9:.0f} nm). "
-            "This is *exact* and amplitude-independent -- every adjacent-level transition (0↔1, 1↔2, 2↔3, ...) "
-            "sits at exactly this same spacing because the harmonic-oscillator ladder is *uniformly* spaced "
-            "(E_n = ħω_HO(n+1)); that's what makes 'the resonant frequency' a single well-defined number here, "
-            "rather than something that shifts as more levels get populated (as it would in an anharmonic well)."
-        )
-
-        st.markdown("#### Orbital gallery (reference): |ψ(n_x,n_y)(x,y)|² and their energies")
-        fig_orb, axes = plt.subplots(nmax + 1, nmax + 1, figsize=(1.9 * (nmax + 1), 1.9 * (nmax + 1)))
-        for nx in range(nmax + 1):
-            for ny in range(nmax + 1):
-                ax = axes[nx, ny] if nmax > 0 else axes
-                orb = qmi.eigenfunction_2d(nx, ny) ** 2
-                ax.imshow(orb.T, origin="lower", cmap="magma")
-                ax.set_xticks([]); ax.set_yticks([])
-                E_ho = HBAR * qmi.omega_ho * (nx + ny + 1)
-                ax.set_title(f"({nx},{ny})  E={E_ho / QE * 1000:.0f} meV", fontsize=7)
-        fig_orb.suptitle("Rows = n_x, columns = n_y", fontsize=9)
-        fig_orb.tight_layout()
-        st.pyplot(fig_orb, use_container_width=False)
-
-        if lb is not None:
-            st.markdown("#### Electron density |Ψ|²: with vs. without backward coupling")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.caption("With backward coupling")
-                show_video(lr["qm_anim"], "levels_qm_density_with", key="levels_qm_video_with")
-            with c2:
-                st.caption("Without (baseline)")
-                show_video(lb["qm_anim"], "levels_qm_density_without", key="levels_qm_video_without")
-
-            st.markdown("#### Level populations |c(n_x,n_y)|²: with vs. without backward coupling")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.caption("With backward coupling")
-                show_video(lr["pop_anim"], "levels_pop_with", key="levels_pop_video_with")
-            with c2:
-                st.caption("Without (baseline)")
-                show_video(lb["pop_anim"], "levels_pop_without", key="levels_pop_video_without")
-
-            st.markdown("#### EM field: with vs. without backward coupling")
-            c1, c2 = st.columns(2)
-            with c1:
-                st.caption("With backward coupling")
-                show_video(lr["em_anim"], "levels_field_with", key="levels_field_video_with")
-            with c2:
-                st.caption("Without (baseline)")
-                show_video(lb["em_anim"], "levels_field_without", key="levels_field_video_without")
-        else:
-            st.markdown("#### Electron density |Ψ|² (animation)")
-            show_video(lr["qm_anim"], "levels_qm_density", key="levels_qm_video")
-            st.markdown("#### Level populations |c(n_x,n_y)|² (animation — same (n_x,n_y) grid as the gallery above)")
-            show_video(lr["pop_anim"], "levels_population_grid", key="levels_pop_video")
-            st.markdown("#### EM field (animation)")
-            show_video(lr["em_anim"], "levels_field", key="levels_field_video")
-
-        st.markdown("#### Population vs. time, strongest levels")
-        pf = lr["pop_frames"]  # (frames, nmax+1, nmax+1)
-        t_fs = lr["pop_t"] / FS
-        flat = pf.reshape(pf.shape[0], -1)
-        peak = flat.max(axis=0)
-        order = np.argsort(-peak)
-        top_k = min(5, flat.shape[1])
-        series = {}
-        for idx in order[:top_k]:
-            nx, ny = divmod(idx, nmax + 1)
-            series[f"(n_x={nx}, n_y={ny}) with backward"] = flat[:, idx]
-        if lb is not None:
-            flat_b = lb["pop_frames"].reshape(lb["pop_frames"].shape[0], -1)
-            for idx in order[:top_k]:
-                nx, ny = divmod(idx, nmax + 1)
-                series[f"(n_x={nx}, n_y={ny}) without"] = flat_b[:, idx]
-        fig_pop = line_plot(t_fs, series, "t [fs]", "population |c|²", "Strongest-populated levels vs. time")
-        if lr.get("is_pulse") and lr.get("pulse_end_t") is not None:
-            fig_pop.axes[0].axvline(lr["pulse_end_t"] / FS, color="k", ls="--", lw=1, label="pulse effectively over")
-            fig_pop.axes[0].legend(fontsize=7)
-        st.pyplot(fig_pop, use_container_width=False)
-
-        total = flat.sum(axis=1)
-        tot_series = {"total tracked population (with backward)": total}
-        if lb is not None:
-            tot_series["total tracked population (without)"] = lb["pop_frames"].reshape(lb["pop_frames"].shape[0], -1).sum(axis=1)
-        fig_tot = line_plot(t_fs, tot_series, "t [fs]", "Σ|c(n_x,n_y)|²",
-                             f"Population accounted for within n_x,n_y ≤ {nmax} (should stay close to 1)")
-        fig_tot.axes[0].set_ylim(0, 1.05)
-        if lr.get("is_pulse") and lr.get("pulse_end_t") is not None:
-            fig_tot.axes[0].axvline(lr["pulse_end_t"] / FS, color="k", ls="--", lw=1, label="pulse effectively over")
-            fig_tot.axes[0].legend(fontsize=7)
-        st.pyplot(fig_tot, use_container_width=False)
-
-        if lr.get("is_pulse"):
-            plateau_note = (
-                "**Without backward coupling**, once the drive term truly vanishes from the Hamiltonian, each "
-                "already-populated energy level's population is *individually conserved* -- only its phase keeps "
-                "evolving. Verified directly: population(0,0) measured every ~2 fs after the pulse came out to "
-                "0.720, 0.718, 0.718, 0.718, 0.718, 0.718, 0.718 -- essentially an exact plateau." if not lr["backward"] else
-                "**With backward coupling on** (as this run is), don't expect an exact plateau: the well keeps "
-                "weakly driving *itself* after the incident pulse is long gone, through its own re-radiated "
-                "near-field feeding back into the local E-field it samples -- a further, distinct signature of "
-                "backward coupling. Verified directly: population(0,0) measured every ~2 fs after the pulse kept "
-                "genuinely drifting (0.52, 0.48, 0.45, 0.48, 0.54, 0.61, 0.62, ...) instead of settling, unlike "
-                "the backward-off case, which plateaus almost exactly."
-            )
-            st.caption(
-                f"**What to expect after the dashed line (pulse gone):** {plateau_note} Either way, what keeps "
-                "changing after the pulse is the **relative phase** between the populated levels (plus, with "
-                "backward coupling, the slow drift above) -- and phase evolution alone is exactly what makes the "
-                "|Ψ|² density and the EM field keep visibly oscillating below, the electron 'ringing' on its own "
-                "like a bell that's been struck, powered by energy the pulse already deposited rather than "
-                "anything still pushing it from outside."
-            )
-        if total[-1] < 0.9:
-            st.warning(
-                f"Only {total[-1]*100:.0f}% of the population is accounted for within the tracked levels "
-                f"(n_x,n_y ≤ {nmax}) by the end of the run -- the drive is strong/long enough to be pushing "
-                "real population into higher orbitals than are being tracked. Increase 'Track levels up to' "
-                "if you want to follow it further, or reduce the amplitude/duration."
-            )
-
-        if lb is not None:
-            pop_with_00 = pf[-1, 0, 0]
-            pop_without_00 = lb["pop_frames"][-1, 0, 0]
-            st.caption(
-                f"**Radiation-reaction check:** final ground-state population is "
-                f"{pop_with_00:.4f} with backward coupling vs. {pop_without_00:.4f} without -- these differ "
-                "because backward coupling changes the *local* field the well itself sees (its own near-field "
-                "adds to the incident field at its own location), which is a genuine self-consistent effect, "
-                "not numerical error. It grows with particle density N; at very high N (>~1e11) it dominates "
-                "and the coupled system enters a strongly-coupled regime where this simple picture (a fixed "
-                "external drive perturbing the well) breaks down."
-            )
-        else:
-            st.caption(
-                "Note N (particle density) mainly sets how strongly backward coupling perturbs the *EM field*; "
-                "check the comparison option above to see whether/how much it feeds back into the electron's "
-                "own populations here too."
-            )
 
 # ============================================================================ Report
 with tab_report:
