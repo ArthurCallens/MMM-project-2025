@@ -808,6 +808,158 @@ with tab_coupled:
             "once the well is driven); with it disabled, only the incident field reaches the well."
         )
 
+    # ------------------------------------------------------------ Energy levels / orbitals
+    st.markdown("---")
+    st.markdown("### 🔬 Energy levels / orbitals under backward-coupled driving")
+    st.caption(
+        "A single, always-backward-coupled well, decomposed onto the harmonic-oscillator "
+        "energy eigenstates |n_x, n_y⟩ (E = ħω_HO(n_x+n_y+1)) at every recorded instant, so "
+        "you can watch population move between orbitals as the field drives it — a much more "
+        "sensitive probe than the electron's spatial position, since even a barely-visible "
+        "displacement corresponds to a clearly-resolvable shift of population into excited "
+        "levels (Ehrenfest's theorem says almost nothing moves in *space* for a weak drive, "
+        "but the *state* is already a distinctly different superposition)."
+    )
+    with st.form("levels_form"):
+        c1, c2, c3, c4 = st.columns(4)
+        lv_Lx_nm = c1.number_input("Domain Lx=Ly [nm]", value=50.0, min_value=15.0, key="lv_Lx")
+        lv_dx_nm = c2.number_input("EM grid step [nm]", value=0.5, min_value=0.05, key="lv_dx")
+        lv_wL = c3.number_input("Well size [nm]", value=5.0, key="lv_wL")
+        lv_wdx = c4.number_input("Well dx [pm]", value=50.0, key="lv_wdx")
+
+        c1, c2, c3, c4 = st.columns(4)
+        lv_m_eff = c1.number_input("m* [m_e]", value=0.15, key="lv_m")
+        lv_f_ho = c2.number_input("f_HO [THz]", value=795.8, key="lv_fho")
+        lv_fc = c3.number_input("Drive frequency [THz] (=f_HO for resonance)", value=795.8, key="lv_fc")
+        lv_ramp = c4.number_input("Ramp-on [cycles]", value=5.0, min_value=1.0, key="lv_ramp")
+
+        c1, c2, c3, c4 = st.columns(4)
+        lv_amp = c1.number_input("Drive amplitude E0 [V/m]", value=1e10, key="lv_amp",
+                                  help="Level populations are sensitive: ~2e8 V/m (the other sections' default) "
+                                       "barely nudges population out of the ground state; ~1e10 V/m gives a "
+                                       "clearly visible spread across several levels.")
+        lv_N = c2.number_input("Particle density N [1e7 /m]", value=100.0, min_value=0.0, key="lv_N",
+                                help="Only affects how strongly the well radiates back into the EM field "
+                                     "(backward coupling) -- it does not affect the electron's own dynamics "
+                                     "or level populations, which depend only on the drive amplitude/frequency.")
+        lv_nmax = c3.number_input("Track levels up to n_x,n_y =", value=3, min_value=1, max_value=6, step=1, key="lv_nmax")
+        lv_nsteps = c4.number_input("Number of time steps", value=3000, min_value=200, max_value=20000, step=200, key="lv_nsteps")
+
+        run_levels = st.form_submit_button("▶ Run", type="primary")
+
+    if run_levels:
+        Lx = Ly = lv_Lx_nm * NM
+        dx = lv_dx_nm * NM
+        grid = Grid2D(uniform_axis(Lx, dx), uniform_axis(Ly, dx))
+        mats = build_material_maps(grid, [])
+        dt = grid.cfl_dt(0.9)
+        pml = PMLParams(thickness=10 * dx)
+        fdtd = FDTD2D(grid, dt, mats, pml_x=pml, pml_y=pml)
+
+        omega_ho = 2 * np.pi * lv_f_ho * 1e12
+        profile = RampedSine(amplitude=lv_amp, omega_c=2 * np.pi * lv_fc * 1e12, ramp_cycles=lv_ramp)
+        wave = PlaneWave(profile, theta_deg=0.0, E0=1.0)
+        margin = 14  # PML is 10 cells thick here, plus a small buffer
+        fdtd.add_tfsf(wave, margin, grid.Nx - margin, margin, grid.Ny - margin)
+
+        qmi = Schrodinger2D(Lx=lv_wL * NM, Ly=lv_wL * NM, dx=lv_wdx * 1e-12, m_eff=lv_m_eff * ME, omega_ho=omega_ho)
+        qmi.set_state(qmi.ground_state())
+        well = Well(qm=qmi, x0=Lx / 2, y0=Ly / 2, N=lv_N * 1e7, backward_coupling=True, label="well")
+        coupled = CoupledSimulation(fdtd, [well])
+
+        nmax = int(lv_nmax)
+        n_frames = 110
+        frame_every = max(1, int(lv_nsteps) // n_frames)
+        em_frames, qm_frames, pop_frames, pop_t = [], [], [], []
+        prog = st.progress(0.0, text="Running…")
+        t0 = time.time()
+        for n in range(int(lv_nsteps)):
+            coupled.step()
+            if n % frame_every == 0:
+                em_frames.append(fdtd.Hz.copy())
+                qm_frames.append(np.abs(qmi.psi) ** 2)
+                pop_frames.append(qmi.level_populations(nmax))
+                pop_t.append(qmi.t)
+            if n % max(1, int(lv_nsteps) // 20) == 0:
+                prog.progress(min(1.0, (n + 1) / lv_nsteps), text=f"Running… step {n + 1}/{int(lv_nsteps)}")
+        prog.empty()
+        elapsed = time.time() - t0
+
+        with st.spinner("Encoding animations…"):
+            em_anim = safe_animate(field_frames_to_gif, em_frames, grid.xd, grid.yd, "H_z(x,y)")
+            qm_anim = safe_animate(field_frames_to_gif, qm_frames, qmi.x, qmi.y, "|Ψ(x,y)|²", cmap="viridis", symmetric=False)
+            lvl_axis = np.arange(nmax + 1) * NM
+            pop_anim = safe_animate(field_frames_to_gif, pop_frames, lvl_axis, lvl_axis,
+                                     "Level population |c(n_x,n_y)|²", cmap="viridis", symmetric=False, unit="level index")
+
+        pop_frames_arr = np.array(pop_frames)  # (n_frames, nmax+1, nmax+1)
+        st.session_state["levels_result"] = dict(
+            qm=qmi, nmax=nmax, elapsed=elapsed, nsteps=int(lv_nsteps),
+            em_anim=em_anim, qm_anim=qm_anim, pop_anim=pop_anim,
+            pop_frames=pop_frames_arr, pop_t=np.array(pop_t),
+        )
+
+    if "levels_result" in st.session_state:
+        lr = st.session_state["levels_result"]
+        qmi, nmax = lr["qm"], lr["nmax"]
+        st.success(f"Done: {lr['nsteps']} steps, wall time {lr['elapsed']:.2f} s "
+                   f"({lr['nsteps'] / max(lr['elapsed'], 1e-9):.0f} steps/s).")
+
+        st.markdown("#### Orbital gallery (reference): |ψ(n_x,n_y)(x,y)|² and their energies")
+        fig_orb, axes = plt.subplots(nmax + 1, nmax + 1, figsize=(1.9 * (nmax + 1), 1.9 * (nmax + 1)))
+        for nx in range(nmax + 1):
+            for ny in range(nmax + 1):
+                ax = axes[nx, ny] if nmax > 0 else axes
+                orb = qmi.eigenfunction_2d(nx, ny) ** 2
+                ax.imshow(orb.T, origin="lower", cmap="magma")
+                ax.set_xticks([]); ax.set_yticks([])
+                E_ho = HBAR * qmi.omega_ho * (nx + ny + 1)
+                ax.set_title(f"({nx},{ny})  E={E_ho / QE * 1000:.0f} meV", fontsize=7)
+        fig_orb.suptitle("Rows = n_x, columns = n_y", fontsize=9)
+        fig_orb.tight_layout()
+        st.pyplot(fig_orb, use_container_width=False)
+
+        st.markdown("#### Electron density |Ψ|² (animation)")
+        show_video(lr["qm_anim"], "levels_qm_density", key="levels_qm_video")
+
+        st.markdown("#### Level populations |c(n_x,n_y)|² (animation — same (n_x,n_y) grid as the gallery above)")
+        show_video(lr["pop_anim"], "levels_population_grid", key="levels_pop_video")
+
+        st.markdown("#### EM field (animation)")
+        show_video(lr["em_anim"], "levels_field", key="levels_field_video")
+
+        st.markdown("#### Population vs. time, strongest levels")
+        pf = lr["pop_frames"]  # (frames, nmax+1, nmax+1)
+        t_fs = lr["pop_t"] / FS
+        flat = pf.reshape(pf.shape[0], -1)
+        peak = flat.max(axis=0)
+        order = np.argsort(-peak)
+        top_k = min(6, flat.shape[1])
+        series = {}
+        for idx in order[:top_k]:
+            nx, ny = divmod(idx, nmax + 1)
+            series[f"(n_x={nx}, n_y={ny})"] = flat[:, idx]
+        fig_pop = line_plot(t_fs, series, "t [fs]", "population |c|²", "Strongest-populated levels vs. time")
+        st.pyplot(fig_pop, use_container_width=False)
+
+        total = flat.sum(axis=1)
+        fig_tot = line_plot(t_fs, {"total tracked population": total}, "t [fs]", "Σ|c(n_x,n_y)|²",
+                             f"Population accounted for within n_x,n_y ≤ {nmax} (should stay close to 1)")
+        fig_tot.axes[0].set_ylim(0, 1.05)
+        st.pyplot(fig_tot, use_container_width=False)
+        if total[-1] < 0.9:
+            st.warning(
+                f"Only {total[-1]*100:.0f}% of the population is accounted for within the tracked levels "
+                f"(n_x,n_y ≤ {nmax}) by the end of the run -- the drive is strong/long enough to be pushing "
+                "real population into higher orbitals than are being tracked. Increase 'Track levels up to' "
+                "if you want to follow it further, or reduce the amplitude/duration."
+            )
+        st.caption(
+            "Note N (particle density) only changes how strongly backward coupling perturbs the *EM field* "
+            "(see the field animation and the with/without comparison above) -- it has no effect on the "
+            "electron's own level populations, which are set entirely by the forward-coupling drive."
+        )
+
 # ============================================================================ Report
 with tab_report:
     from report_content import render_report
