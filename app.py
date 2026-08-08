@@ -794,8 +794,11 @@ with tab_coupled:
             "Forward coupling: the E-field sampled at each well drives its Schrödinger equation through the "
             "length-gauge interaction Hamiltonian. Backward coupling: each well's quantum current density "
             "(eq. 1 of the Part-2 brief) is deposited as a source current on the EM grid — with it enabled, "
-            "the well radiates back into the EM field (visible as a weak secondary wavelet in the H_z snapshot "
-            "once the well is driven); with it disabled, only the incident field reaches the well."
+            "the well radiates back into the EM field; with it disabled, only the incident field reaches the "
+            "well. At default settings (a single electron, N=1e7/m) this radiated field is only ~0.001% of "
+            "the incident field — real, but far too small to see by eye in this raw snapshot or the animation "
+            "above. Use the **comparison** option in the form to see it isolated in the ΔH_z difference plot, "
+            "or increase N / drive near resonance to make it larger."
         )
 
 # ============================================================================ Report
