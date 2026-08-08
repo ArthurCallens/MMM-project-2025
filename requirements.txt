@@ -4,3 +4,5 @@ matplotlib>=3.7
 streamlit>=1.30
 numba>=0.58
 pytest>=7.0
+imageio>=2.31
+imageio-ffmpeg>=0.4.9

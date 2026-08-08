@@ -20,6 +20,7 @@ from emqm.quantum import Schrodinger2D
 from emqm.sources import GaussianPulse, fft_frequency_response
 from emqm.tfsf import PlaneWave
 from emqm.validation import free_space_plane_wave_delay, pmc_cylinder_hz
+from video import field_frames_to_mp4
 
 
 def _propagation_and_pml_demo():
@@ -36,11 +37,16 @@ def _propagation_and_pml_demo():
     sim.add_tfsf(wave, margin, grid.Nx - margin, margin, grid.Ny - margin)
     obs = sim.add_observer(Lx * 0.5, Ly * 0.5)
     energies = []
+    frames = []
     nsteps = 900
+    frame_every = max(1, nsteps // 45)
     for n in range(nsteps):
         sim.step()
         if n % 10 == 0:
             energies.append((sim.t, np.sum(sim.Ex ** 2) + np.sum(sim.Ey ** 2) + np.sum(sim.Hz ** 2)))
+        if n % frame_every == 0:
+            frames.append(sim.Hz.copy())
+    video = field_frames_to_mp4(frames, grid.xd, grid.yd, "H_z(x,y) — plane wave crossing + PML absorption", fps=14)
     t_arr = np.array(obs.t)
     ey = np.array(obs.Ey)
     peak_t = t_arr[np.argmax(np.abs(ey))]
@@ -49,7 +55,7 @@ def _propagation_and_pml_demo():
     peak_e = energies[:, 1].max()
     final_e = energies[-1, 1]
     db = 10 * np.log10(final_e / peak_e)
-    return dict(t_arr=t_arr, ey=ey, peak_t=peak_t, expected=expected, energies=energies, db=db)
+    return dict(t_arr=t_arr, ey=ey, peak_t=peak_t, expected=expected, energies=energies, db=db, video=video)
 
 
 def _pmc_validation_demo():
@@ -70,8 +76,17 @@ def _pmc_validation_demo():
     xo, yo = cx + rho_obs * np.cos(phi_obs), cy + rho_obs * np.sin(phi_obs)
     obs = sim.add_observer(xo, yo)
     nsteps = 5000
+    frames = []
+    frame_every = max(1, nsteps // 45)
     for n in range(nsteps):
         sim.step()
+        if n % frame_every == 0:
+            frames.append(sim.Hz.copy())
+
+    def _mark_cyl(ax, _cx=cx, _cy=cy, _a=a):
+        ax.add_patch(plt.Circle((_cx / NM, _cy / NM), _a / NM, fill=False, color="k", lw=1.2))
+
+    video = field_frames_to_mp4(frames, grid.xd, grid.yd, "H_z(x,y) — scattering off a PMC cylinder", fps=16, mark_fn=_mark_cyl)
     omega_max = pulse.omega_max(3.0)
     omega, spec = fft_frequency_response(np.array(obs.t), np.array(obs.Hz), band=(0.2 * omega_max, 0.75 * omega_max))
     pos = omega > 0
@@ -79,7 +94,7 @@ def _pmc_validation_demo():
     src_spec = pulse.spectrum_complex(omega_p) / ETA0
     response = spec_p / src_spec
     analytic = pmc_cylinder_hz(omega_p, rho_obs, phi_obs, a, nmax=40, kind="total", cyl_x=cx, cyl_y=cy)
-    return dict(f=omega_p / 2 / np.pi / 1e12, response=response, analytic=analytic)
+    return dict(f=omega_p / 2 / np.pi / 1e12, response=response, analytic=analytic, video=video)
 
 
 def _qm_demo():
@@ -94,11 +109,17 @@ def _qm_demo():
     qm2.set_state(qm2.coherent_state(x0=x0))
     dt = T / 300
     ts, xs, norms = [], [], []
+    frames = []
+    frame_every = max(1, 600 // 45)
     for n in range(600):
         qm2.step(dt)
         ex, _ = qm2.expectation_xy()
         ts.append(qm2.t); xs.append(ex); norms.append(qm2.norm())
+        if n % frame_every == 0:
+            frames.append(np.abs(qm2.psi) ** 2)
     ts, xs, norms = np.array(ts), np.array(xs), np.array(norms)
+    video = field_frames_to_mp4(frames, qm2.x, qm2.y, "|Ψ(x,y)|² — displaced coherent state in the HO well",
+                                 cmap="viridis", symmetric=False, fps=14)
 
     # tiny resolution-convergence study (2 resolutions, short duration, for speed)
     conv = []
@@ -115,7 +136,7 @@ def _qm_demo():
         err = np.max(np.abs(np.array(xs3) - x0 * np.cos(omega * t3))) / x0
         conv.append((dxq / NM, err))
 
-    return dict(Ekin0=Ekin0, ts=ts, xs=xs, norms=norms, x0=x0, omega=omega, conv=conv)
+    return dict(Ekin0=Ekin0, ts=ts, xs=xs, norms=norms, x0=x0, omega=omega, conv=conv, video=video)
 
 
 def _run_all():
@@ -263,6 +284,7 @@ def render_report(st):
         "**Validation 1 — plane-wave propagation & PML absorption.** 240x240 nm domain, "
         "dx=4 nm, Gaussian pulse (sigma=0.6 fs), no scatterer, observer at domain centre."
     )
+    st.video(d["prop"]["video"])
     st.pyplot(_fig_propagation(d["prop"]), use_container_width=False)
     dt_err_fs = (d["prop"]["peak_t"] - d["prop"]["expected"]) / FS
     st.markdown(
@@ -280,6 +302,7 @@ def render_report(st):
         "series) solution — the dual of the classical TM/PEC-cylinder problem (assignment "
         "footnote 4)."
     )
+    st.video(d["pmc"]["video"])
     st.pyplot(_fig_pmc(d["pmc"]), use_container_width=False)
     st.markdown(
         "The simulated and analytic spectra agree on the overall magnitude and trend (both "
@@ -301,11 +324,12 @@ def render_report(st):
         f"**Validation 3 — QM solver.** Single HO well, `dx=0.05 nm`, `m*=0.15 m_e`, "
         f"`omega_HO=5e15` rad/s (matching the assignment's suggested parameters). Ground-state "
         f"kinetic energy `<T>` = {d['qm']['Ekin0']:.4e} J, vs. the exact virial-theorem value "
-        f"`hbar*omega/4` (2-D) = {1.054571817e-34*d['qm']['omega']/4:.4e} J "
-        f"({abs(d['qm']['Ekin0']-1.054571817e-34*d['qm']['omega']/4)/(1.054571817e-34*d['qm']['omega']/4)*100:.2f}% "
+        f"`hbar*omega/2` (2-D) = {1.054571817e-34*d['qm']['omega']/2:.4e} J "
+        f"({abs(d['qm']['Ekin0']-1.054571817e-34*d['qm']['omega']/2)/(1.054571817e-34*d['qm']['omega']/2)*100:.2f}% "
         "discretisation error). A displaced coherent state (x0=0.6 nm) is then evolved with no "
         "driving field:"
     )
+    st.video(d["qm"]["video"])
     st.pyplot(_fig_qm(d["qm"]), use_container_width=False)
     conv = d["qm"]["conv"]
     st.markdown(

@@ -33,6 +33,7 @@ from emqm.quantum import Schrodinger2D
 from emqm.sources import GaussianPulse, ModulatedGaussianPulse, RampedSine, fft_frequency_response
 from emqm.tfsf import PlaneWave
 from emqm.validation import dielectric_cylinder_hz, free_space_plane_wave_delay, pmc_cylinder_hz
+from video import field_frames_to_mp4, line_series_to_mp4
 
 st.set_page_config(page_title="Hybrid QM/EM FDTD — Electrons in 2-D Wells", layout="wide")
 
@@ -241,10 +242,23 @@ with tab_em:
         prog.empty()
         elapsed = time.time() - t0
 
+        def mark_scatterers(ax, _scatterers=scatterers, _ox=obs_x * NM, _oy=obs_y * NM):
+            for s in _scatterers:
+                shp = s.shape
+                if isinstance(shp, Circle):
+                    ax.add_patch(plt.Circle((shp.cx / NM, shp.cy / NM), shp.r / NM, fill=False, color="k", lw=1.2))
+                else:
+                    ax.add_patch(plt.Rectangle((shp.x0 / NM, shp.y0 / NM), (shp.x1 - shp.x0) / NM,
+                                                (shp.y1 - shp.y0) / NM, fill=False, color="k", lw=1.2))
+            ax.plot(_ox / NM, _oy / NM, "k+", ms=10, mew=2)
+
+        with st.spinner("Encoding field animation (MP4)…"):
+            video_bytes = field_frames_to_mp4(frames, grid.xd, grid.yd, "H_z(x,y)", mark_fn=mark_scatterers)
+
         st.session_state["em_result"] = dict(
             grid=grid, fdtd=fdtd, obs=obs, frames=frames, elapsed=elapsed,
             scatterers=scatterers, profile=profile, wave=wave, theta_deg=theta_deg,
-            obs_x=obs_x * NM, obs_y=obs_y * NM, dt=dt, nsteps=int(nsteps),
+            obs_x=obs_x * NM, obs_y=obs_y * NM, dt=dt, nsteps=int(nsteps), video=video_bytes,
         )
 
     if "em_result" in st.session_state:
@@ -253,8 +267,12 @@ with tab_em:
         st.success(f"Done: {res['nsteps']} steps, dt={res['dt']:.3e} s, wall time {res['elapsed']:.2f} s "
                    f"({res['nsteps'] / max(res['elapsed'], 1e-9):.0f} steps/s, engine={fdtd.engine}).")
 
-        st.markdown("#### Field snapshot")
-        frame_idx = st.slider("Snapshot (time step index)", 0, len(res["frames"]) - 1, len(res["frames"]) - 1)
+        st.markdown("#### Field animation (video)")
+        st.video(res["video"])
+        st.download_button("⬇ Download H_z field animation (MP4)", data=res["video"],
+                            file_name="em_field.mp4", mime="video/mp4", key="em_video_dl")
+
+        st.markdown("#### Field snapshot (single frame, larger view)")
 
         def mark_scatterers(ax):
             for s in res["scatterers"]:
@@ -266,6 +284,7 @@ with tab_em:
                                                 (shp.y1 - shp.y0) / NM, fill=False, color="k", lw=1.2))
             ax.plot(res["obs_x"] / NM, res["obs_y"] / NM, "k+", ms=10, mew=2)
 
+        frame_idx = st.slider("Snapshot (time step index)", 0, len(res["frames"]) - 1, len(res["frames"]) - 1)
         fig = heatmap(res["frames"][frame_idx], grid.xd, grid.yd, "H_z(x,y)", extra=mark_scatterers)
         st.pyplot(fig, use_container_width=False)
 
@@ -418,11 +437,13 @@ with tab_qm:
                 prog.progress(min(1.0, (n + 1) / nsteps), text=f"Running QM solver… step {n + 1}/{nsteps}")
         prog.empty()
         elapsed = time.time() - t0
+        with st.spinner("Encoding wavefunction-density animation (MP4)…"):
+            video_bytes = field_frames_to_mp4(frames, qm.x, qm.y, "|Ψ(x,y)|²", cmap="viridis", symmetric=False)
         st.session_state["qm_result"] = dict(
             qm=qm, frames=frames, ts=np.array(ts), xs=np.array(xs), ys=np.array(ys),
             pxs=np.array(pxs), pys=np.array(pys), Ts=np.array(Ts), norms=np.array(norms),
             cont_res=np.array(cont_res), elapsed=elapsed, nsteps=nsteps, omega_ho=omega_ho,
-            state_kind=state_kind, x0=x0_nm * NM, y0=y0_nm * NM, drive_kind=drive_kind,
+            state_kind=state_kind, x0=x0_nm * NM, y0=y0_nm * NM, drive_kind=drive_kind, video=video_bytes,
         )
 
     if "qm_result" in st.session_state:
@@ -431,7 +452,12 @@ with tab_qm:
         st.success(f"Done: {r['nsteps']} steps, wall time {r['elapsed']:.2f} s "
                    f"({r['nsteps'] / max(r['elapsed'], 1e-9):.0f} steps/s). Final norm = {r['norms'][-1]:.10f}.")
 
-        st.markdown("#### Wavefunction density |Ψ|²")
+        st.markdown("#### Wavefunction density |Ψ|² (video)")
+        st.video(r["video"])
+        st.download_button("⬇ Download |Ψ|² animation (MP4)", data=r["video"],
+                            file_name="qm_density.mp4", mime="video/mp4", key="qm_video_dl")
+
+        st.markdown("#### Wavefunction density (single frame, larger view)")
         idx = st.slider("Snapshot", 0, len(r["frames"]) - 1, len(r["frames"]) - 1, key="qm_frame")
         fig = heatmap(r["frames"][idx], qm.x, qm.y, "|Ψ(x,y)|²", cmap="viridis", symmetric=False, unit="nm")
         st.pyplot(fig, use_container_width=False)
@@ -550,8 +576,16 @@ with tab_coupled:
                 prog.progress(min(1.0, (n + 1) / nsteps), text=f"Running coupled EM/QM… step {n + 1}/{int(nsteps)}")
         prog.empty()
         elapsed = time.time() - t0
+
+        def mark_wells(ax, _wells=wells):
+            for w in _wells:
+                ax.plot(w.x0 / NM, w.y0 / NM, "kx", ms=10, mew=2)
+
+        with st.spinner("Encoding field animation (MP4)…"):
+            video_bytes = field_frames_to_mp4(frames, grid.xd, grid.yd, "H_z(x,y)", mark_fn=mark_wells)
+
         st.session_state["coupled_result"] = dict(grid=grid, fdtd=fdtd, wells=wells, frames=frames,
-                                                    elapsed=elapsed, nsteps=int(nsteps))
+                                                    elapsed=elapsed, nsteps=int(nsteps), video=video_bytes)
 
     if "coupled_result" in st.session_state:
         r = st.session_state["coupled_result"]
@@ -559,7 +593,12 @@ with tab_coupled:
         st.success(f"Done: {r['nsteps']} steps, wall time {r['elapsed']:.2f} s "
                    f"({r['nsteps'] / max(r['elapsed'], 1e-9):.0f} steps/s).")
 
-        st.markdown("#### EM field snapshot (H_z), well centre(s) marked")
+        st.markdown("#### EM field animation (video), well centre(s) marked")
+        st.video(r["video"])
+        st.download_button("⬇ Download H_z field animation (MP4)", data=r["video"],
+                            file_name="coupled_field.mp4", mime="video/mp4", key="coupled_video_dl")
+
+        st.markdown("#### EM field snapshot (single frame, larger view)")
         idx = st.slider("Snapshot", 0, len(r["frames"]) - 1, len(r["frames"]) - 1, key="coupled_frame")
 
         def mark_wells(ax):
