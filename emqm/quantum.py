@@ -122,8 +122,11 @@ class Schrodinger2D:
         """Advance the wavefunction by one time step under a spatially-uniform field
         (Ex, Ey) (already time-centred by the caller, e.g. averaged over the step)."""
         interior = self.psi[self.ix, self.iy]
-        vx_extra = self.Vx0 + self.charge * Ex * self.xi
-        vy_extra = self.Vy0 + self.charge * Ey * self.yi
+        # Length-gauge dipole interaction: H_int = -q(Ex x + Ey y) (Cohen-Tannoudji "E1"
+        # form, equivalently the ordinary Lorentz force F = qE on the charge in a uniform
+        # field -- NOT +q(Ex x + Ey y), which integrates to the opposite-sign force).
+        vx_extra = self.Vx0 - self.charge * Ex * self.xi
+        vy_extra = self.Vy0 - self.charge * Ey * self.yi
 
         interior = self._sweep(interior, vx_extra, axis=0, dt=dt)
         interior = self._sweep(interior, vy_extra, axis=1, dt=dt)
